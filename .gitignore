@@ -1,0 +1,25 @@
+# ADNI data must never be committed (ADNI Data Use Agreement)
+data/
+runs/
+models/
+*.nii
+*.nii.gz
+*.dcm
+*.npy
+*.enc
+*.zip
+*ADNI*.csv
+*DXSUM*.csv
+*DATADIC*.csv
+*Key_MRI*.csv
+# secrets and local AWS state
+*.key
+deploy/secrets.json
+deploy/.env
+deploy/aws/config.env
+deploy/aws/state.env
+deploy/aws/rendered/
+# python
+__pycache__/
+*.pyc
+.venv/

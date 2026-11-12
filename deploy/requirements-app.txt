@@ -1,0 +1,14 @@
+fastapi==0.115.*
+uvicorn[standard]==0.32.*
+python-multipart==0.0.*
+itsdangerous==2.*
+boto3==1.*
+numpy<3
+scipy
+pandas
+scikit-learn
+SimpleITK>=2.2
+nibabel
+brainextractor
+matplotlib
+cryptography

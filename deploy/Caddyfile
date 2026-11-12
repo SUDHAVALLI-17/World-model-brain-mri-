@@ -1,0 +1,23 @@
+# HTTPS reverse proxy.
+#   DOMAIN=brainwm.example.org TLS=you@example.org  -> free Let's Encrypt certificate (needs a DNS name)
+#   DOMAIN=:443 or an IP, TLS=internal              -> self-signed certificate (browser shows a warning)
+{$DOMAIN} {
+	tls {$TLS}
+	encode gzip
+	request_body {
+		max_size 410MB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	reverse_proxy app:8000 {
+		transport http {
+			read_timeout 10m
+		}
+	}
+	log {
+		output stdout
+		format json
+	}
+}

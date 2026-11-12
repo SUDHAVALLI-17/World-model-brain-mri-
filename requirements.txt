@@ -1,0 +1,10 @@
+torch>=2.2
+numpy
+pandas
+scipy
+scikit-learn
+SimpleITK>=2.2
+matplotlib
+cryptography
+nibabel
+brainextractor

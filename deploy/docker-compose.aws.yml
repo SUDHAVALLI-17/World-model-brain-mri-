@@ -1,0 +1,22 @@
+# Overrides for EC2: secrets from AWS Secrets Manager, logs to CloudWatch.
+#   docker compose -f docker-compose.yml -f docker-compose.aws.yml --env-file .env up -d --build
+services:
+  app:
+    environment:
+      SECRET_ID: ${SECRET_ID}
+      AWS_REGION: ${AWS_REGION}
+      AWS_DEFAULT_REGION: ${AWS_REGION}
+      S3_BUCKET: ${UPLOAD_BUCKET:-}
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION}
+        awslogs-group: ${LOG_GROUP}
+        awslogs-stream: app
+  caddy:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION}
+        awslogs-group: ${LOG_GROUP}
+        awslogs-stream: caddy

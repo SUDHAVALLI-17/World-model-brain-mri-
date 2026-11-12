@@ -1,0 +1,9 @@
+# Laptop run: secrets from a local file (make it with: python -m app.security make-secrets --out deploy/secrets.json)
+#   cd deploy && docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#   then open https://localhost (self-signed certificate: accept the browser warning)
+services:
+  app:
+    environment:
+      SECRETS_FILE: /run/secrets/app.json
+    volumes:
+      - ./secrets.json:/run/secrets/app.json:ro

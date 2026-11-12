@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Brain-MRI world model</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header><h1>Brain-MRI world model</h1></header>
+<div class="banner">Research prototype. Not a medical device and not for diagnosis.</div>
+<div class="card login">
+  <h2>Sign in</h2>
+  <form method="post" action="/login" autocomplete="on">
+    <label for="u">Username</label>
+    <input id="u" name="username" type="text" maxlength="64" required autofocus>
+    <label for="p">Password</label>
+    <input id="p" name="password" type="password" maxlength="256" required>
+    <button type="submit">Sign in</button>
+    <p id="err" class="error hidden"></p>
+  </form>
+</div>
+<script src="/static/login.js"></script>
+</body>
+</html>

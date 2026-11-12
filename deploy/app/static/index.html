@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Brain-MRI world model</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Brain-MRI world model</h1>
+  <div class="who"><span id="who"></span><button id="logout" class="link">Sign out</button></div>
+</header>
+<div class="banner">Research prototype. Not a medical device and not for diagnosis. Do not upload scans you are not allowed to share.</div>
+<main>
+  <section class="card">
+    <h2>Analyse a T1 brain MRI</h2>
+    <form id="form">
+      <label for="file">Scan: NIfTI (.nii / .nii.gz) or a .zip of one DICOM study</label>
+      <input id="file" name="file" type="file" accept=".nii,.gz,.zip" required>
+      <div class="row">
+        <div><label for="age">Age (years)</label><input id="age" name="age" type="number" min="1" max="120" step="0.1"></div>
+        <div><label for="sex">Sex</label><select id="sex" name="sex"><option value="">from header / unknown</option><option>M</option><option>F</option></select></div>
+        <div><label for="date">Scan date</label><input id="date" name="scan_date" type="date"></div>
+        <div><label for="sig">Metadata signature (optional)</label><input id="sig" name="metadata_signature" type="text" maxlength="128"></div>
+      </div>
+      <p class="hint">Empty fields are read from the DICOM header. If you fill them in and they disagree with the header, the app flags it.</p>
+      <div class="actions"><button id="go" type="submit">Analyse</button><span id="status" class="status"></span></div>
+      <p id="error" class="error hidden"></p>
+    </form>
+  </section>
+
+  <section id="result" class="card hidden">
+    <div class="result-top">
+      <div>
+        <div class="pred" id="pred"></div>
+        <div id="bars"></div>
+      </div>
+      <img id="fig" class="figure" alt="Grad-CAM heatmap over three orthogonal slices of the processed brain">
+    </div>
+  </section>
+
+  <section id="details" class="grid2 hidden">
+    <div class="card">
+      <h2>Security and quality checks</h2>
+      <table><thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody id="checks"></tbody></table>
+    </div>
+    <div class="card">
+      <h2>World-model forecast</h2>
+      <table><thead><tr><th>Horizon</th><th>Predicted atrophy</th><th>Uncertainty</th></tr></thead><tbody id="forecast"></tbody></table>
+      <p class="hint">Predicted atrophy is the predicted drop in brain-parenchymal fraction. Brain age from the image: <b id="bage"></b>.</p>
+      <h2>Input</h2>
+      <table><tbody id="input"></tbody></table>
+    </div>
+  </section>
+
+  <section id="report" class="card hidden">
+    <h2>Signed report</h2>
+    <p class="hint">The report is signed with the server’s HMAC key. Any change to it, even one digit, breaks the signature.</p>
+    <div class="mono" id="sig-out"></div>
+    <div class="actions">
+      <button id="download" class="secondary" type="button">Download report (JSON)</button>
+      <label class="secondary">Verify a report file <input id="verify-file" type="file" accept=".json"></label>
+      <span id="verify-status" class="status"></span>
+    </div>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
