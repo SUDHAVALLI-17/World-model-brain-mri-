@@ -32,6 +32,7 @@ def main():
     ap.add_argument("--out", default="models")
     ap.add_argument("--version", default=datetime.date.today().isoformat())
     ap.add_argument("--trained_on", default="")
+    ap.add_argument("--header_detector", default=None, help="optional header_detector.joblib (src/header_anomaly.py)")
     ap.add_argument("--target", type=int, default=None, help="input size; read from data if omitted")
     a = ap.parse_args()
     cls = sorted(glob.glob(a.classifiers))
@@ -48,11 +49,16 @@ def main():
     torch.save({"model": wm["model"], "cfg": wm["cfg"]}, os.path.join(a.out, "world_model.pt"))
     target = a.target or wm.get("args", {}).get("target") or 96
     files = rel + ["world_model.pt"]
+    extra = {}
+    if a.header_detector:
+        shutil.copy(a.header_detector, os.path.join(a.out, "header_detector.joblib"))
+        files.append("header_detector.joblib")
+        extra["header_detector"] = "header_detector.joblib"
     man = {"version": a.version, "created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "trained_on": a.trained_on,
            "target": int(target), "classifiers": rel, "world_model": "world_model.pt",
-           "sha256": {f: sha256(os.path.join(a.out, f)) for f in files}}
+           **extra, "sha256": {f: sha256(os.path.join(a.out, f)) for f in files}}
     json.dump(man, open(os.path.join(a.out, "manifest.json"), "w"), indent=1)
-    print(f"{len(rel)} classifiers + world model -> {a.out}/ (manifest.json with SHA-256)")
+    print(f"{len(rel)} classifiers + world model{' + header detector' if extra else ''} -> {a.out}/ (manifest.json with SHA-256)")
 
 
 if __name__ == "__main__":

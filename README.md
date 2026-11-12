@@ -64,6 +64,7 @@ in `common.py` and `action_dim`.
 | `src/trajectory_attacks.py` | Paper 1: attacks on the forecast (pixel hijack, fake/hide decline, Δt and age action attacks) |
 | `src/metadata_attacks.py` | Paper 1: age / sex / missing / inconsistent / joint metadata attacks |
 | `src/metadata_guard.py` | Paper 1: HMAC signing + plausibility rules for header metadata |
+| `src/header_anomaly.py` | Paper 1: DICOM header anomaly detection (rules + Isolation Forest + autoencoder) and 12 header attacks |
 | `src/paper1_eval.py` | Paper 1: one report per research question |
 | `src/robustness_eval.py` | Standard vs adversarial: attack curves, MRI corruptions, site probe, attack figure |
 | `src/secure_io.py` | AES encryption at rest, SHA-256 integrity manifest, key handling |
@@ -294,6 +295,42 @@ between the two is the evidence that monotonicity and Trajectory-TRADES defend t
 **Data caution:** the IDA CSV "Age" may be the age at screening rather than at each visit.
 Compute per-visit age from dates (or take it from ADNIMERGE) before running, otherwise the
 clean metadata already fails the age–date consistency rule and the guard results are muddied.
+
+### Header anomaly detection (tampering without a trusted hash)
+
+HMAC signing catches every change to signed metadata, but only when a trusted signature
+exists. `src/header_anomaly.py` judges a scan's DICOM header on its own, for legacy or
+external scans and for tampering that happened before signing:
+
+| Detector | What it uses |
+|---|---|
+| `rules` | Larmor frequency vs field strength (42.58 MHz/T), TE < TR, plausible geometry/flip/weight, study vs acquisition date, header vs form (age, sex, date), age 40–100, vendor/model pairs seen in training |
+| `iforest` | Isolation Forest on ~40 numeric + one-hot header features (exact count depends on vendors seen) |
+| `ae` | small denoising autoencoder, reconstruction error |
+| `hybrid` | rules OR iforest OR ae; `hybrid+hash` adds the trusted-hash baseline |
+
+The learned detectors are fitted on clean training headers. Their thresholds are set on clean
+validation headers at a 5 % target false-positive rate, so they never see an attack before
+the test (unlike a supervised detector trained on the same attacks it is scored on).
+`evaluate` applies 12 controlled attacks to held-out test headers: age shifts (5 y, 20 y,
+implausible), sex flips (form only / form + header), date tampering (inconsistent /
+consistently shifted), field-strength and vendor swaps, protocol and geometry tampering, and
+missing fields. Three of them are *stealthy*: they keep every field consistent with the rest.
+It then reports recall, precision, F1, FPR and AUROC per attack and detector.
+
+```bash
+python src/header_anomaly.py extract  --index data/proc/index_proc.csv --out data/headers.csv
+python src/header_anomaly.py train    --headers data/headers.csv --splits data/splits.json --out runs/header_anomaly
+python src/header_anomaly.py evaluate --headers data/headers.csv --splits data/splits.json \
+    --detector runs/header_anomaly/header_detector.joblib --out runs/header_anomaly
+# -> header_summary.md, header_results.csv, header_recall_heatmap.png, header_flags_clean.csv
+```
+
+`run_all.sh` runs all three steps and packages the detector with the model. The web app then
+adds a "Header anomaly detector" check for DICOM uploads. NIfTI files have no DICOM header,
+so the step is skipped for them. Paper angle: compare hash, rules and learned detectors,
+show which attacks only the image-based brain-age check can catch, and report false
+positives on rare but legitimate scanners.
 
 ## Security (networks & cybersecurity component)
 

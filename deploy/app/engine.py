@@ -32,6 +32,7 @@ from models import BrainWorldModel  # noqa: E402
 from preprocess import (bet_mask, crop_neck, crop_pad_resize, external_mask, n4_correct,  # noqa: E402
                         normalize, otsu_mask, pick_stripper, read_image, resample_iso)
 import trajectory_attacks as TA  # noqa: E402
+from header_anomaly import HeaderDetector, read_header, with_form  # noqa: E402
 
 MAX_ZIP_FILES = 3000
 MAX_UNZIPPED_BYTES = 1_500_000_000
@@ -94,7 +95,7 @@ def find_t1_series(folder):
         score = (bool(T1_RE.search(desc)) and "repeat" not in desc.lower(), bool(T1_RE.search(desc)), len(dcm))
         hdr = {"description": desc, "age": _tag(r, "0010|1010"), "sex": _tag(r, "0010|0040"),
                "date": _tag(r, "0008|0022") or _tag(r, "0008|0020"), "manufacturer": _tag(r, "0008|0070"),
-               "field_strength": _tag(r, "0018|0087"), "n_slices": len(dcm)}
+               "field_strength": _tag(r, "0018|0087"), "n_slices": len(dcm), "raw": read_header(r, len(dcm))}
         if best is None or score > best[0]:
             best = (score, d, hdr)
     if best is None:
@@ -140,6 +141,8 @@ class Engine:
         self.wm = BrainWorldModel(**ck["cfg"])
         self.wm.load_state_dict(ck["model"], strict=False)
         self.wm = self.wm.to(self.dev).eval()
+        hd = self.manifest.get("header_detector")  # optional: DICOM header anomaly detector
+        self.header_det = HeaderDetector.load(os.path.join(model_dir, hd)) if hd else None
         self.sem = threading.Semaphore(max_jobs)
         self.cfg = {"spacing": 1.5, "bet_f": 0.6, "brain_age_tol": float(os.environ.get("BRAIN_AGE_TOL", 12)),
                     "noise_copies": 4, "noise_sigma": 0.01,
@@ -276,6 +279,21 @@ class Engine:
             add("Header vs form", "warn", f"Form says sex {form['sex']}, DICOM header says {h_sex}")
         if header.get("source") == "dicom" and header.get("age") is None:
             add("DICOM header", "warn", "The header has no PatientAge field")
+
+        # header anomaly detector (rules + Isolation Forest + autoencoder), DICOM uploads only
+        if self.header_det is not None:
+            if header.get("raw") is None:
+                add("Header anomaly detector", "warn", "Not run - NIfTI files carry no DICOM header")
+            else:
+                r = self.header_det.check(with_form(header["raw"], form.get("age"), form.get("sex"), form.get("date")))
+                if r["anomalous"]:
+                    why = "; ".join(r["rules"][:3]) or "unusual combination of header values"
+                    add("Header anomaly detector", "warn",
+                        f"Flagged by {', '.join(r['flagged_by'])}: {why} - check the scan's origin")
+                else:
+                    add("Header anomaly detector", "ok",
+                        f"Header looks like the training scans (IF {r['iforest']:.2f} <= {r['iforest_thr']:.2f}, "
+                        f"AE {r['ae']:.3f} <= {r['ae_thr']:.3f})")
 
         # image vs metadata: brain age
         if age is not None:

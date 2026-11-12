@@ -38,6 +38,12 @@ python src/metadata_guard.py sign --index $D/proc/index_proc.csv --key_file "$KE
 python src/metadata_guard.py check --index $D/proc/index_proc.csv
 
 python src/splits.py --index $D/proc/index_proc.csv --out $D/splits.json --folds "$FOLDS" $SPLIT_FLAG
+
+# ---- DICOM header anomaly detector (rules + Isolation Forest + autoencoder), Paper 1
+python src/header_anomaly.py extract --index $D/proc/index_proc.csv --out $D/headers.csv
+python src/header_anomaly.py train --headers $D/headers.csv --splits $D/splits.json --out runs/header_anomaly
+python src/header_anomaly.py evaluate --headers $D/headers.csv --splits $D/splits.json \
+  --detector runs/header_anomaly/header_detector.joblib --out runs/header_anomaly
 C="--index $D/proc/index_proc.csv --splits $D/splits.json --key_file $KEY"
 NF=$(python -c "import json;print(len(json.load(open('$D/splits.json'))['folds']))")
 
@@ -71,6 +77,8 @@ python src/paper1_eval.py $C --world_model runs/pretrain_p1/last.pt \
   --out runs/paper1 $P1_QUICK
 python src/paper1_eval.py $C --world_model runs/pretrain/last.pt \
   --out runs/paper1_nodefence $P1_QUICK   # ablation: no monotonicity / Trajectory-TRADES
+HDET=$( [ -f runs/header_anomaly/header_detector.joblib ] && echo runs/header_anomaly/header_detector.joblib || true )
 python deploy/package_models.py --classifiers "runs/p1_full/fold*/best.pt" \
-  --world_model runs/pretrain_p1/last.pt --out models --trained_on "ADNI, $NF-fold, combined adversarial"
-echo "done - models/ is ready for deploy/aws/setup_aws.sh. Results: see runs/test, runs/robustness, runs/paper1, runs/paper1_nodefence"
+  --world_model runs/pretrain_p1/last.pt --out models \
+  ${HDET:+--header_detector "$HDET"} --trained_on "ADNI, $NF-fold, combined adversarial"
+echo "done - models/ is ready for deploy/aws/setup_aws.sh. Results: see runs/test, runs/robustness, runs/paper1, runs/paper1_nodefence, runs/header_anomaly"

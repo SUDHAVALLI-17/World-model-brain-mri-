@@ -89,6 +89,9 @@ def test_real_scans():
         # header vs form disagreement is flagged
         j2 = _analyze(c, os.environ["TEST_DICOM_ZIP"], age="55", sex="F")
         assert any(x["check"] == "Header vs form" for x in j2["checks"]), j2["checks"]
+        if any(x["check"] == "Header anomaly detector" for x in j["checks"]):  # model dir has a detector
+            hd = next(x for x in j2["checks"] if x["check"] == "Header anomaly detector")
+            assert hd["status"] == "warn", hd  # sex in the form contradicts the header -> flagged
         print(f"DICOM: {j['prediction']} {j['probabilities']} in {j['seconds']} s")
         for x in j2["checks"]:
             print(f"   {x['status']:4s} {x['check']}: {x['detail']}")
