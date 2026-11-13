@@ -197,6 +197,9 @@ def process_one(row, a):
         m = external_mask(img, tool)
     elif tool == "bet":
         m = bet_mask(img, a.bet_f)
+    elif tool == "premasked":  # already skull-stripped: brain = non-background voxels
+        mx = float(sitk.GetArrayViewFromImage(img).max())
+        m = sitk.BinaryFillhole(sitk.Cast(img > 0.02 * mx, sitk.sitkUInt8))
     else:
         m = otsu_mask(img)
     arr = sitk.GetArrayFromImage(img)
@@ -225,7 +228,8 @@ def main():
     ap.add_argument("--out_dir", default="data/proc")
     ap.add_argument("--target", type=int, default=96, help="output cube size (must be divisible by 16)")
     ap.add_argument("--spacing", type=float, default=1.5)
-    ap.add_argument("--skullstrip", default="auto", choices=["auto", "synthstrip", "hdbet", "bet", "otsu"])
+    ap.add_argument("--skullstrip", default="auto", choices=["auto", "synthstrip", "hdbet", "bet", "otsu", "premasked"],
+                    help="premasked = input is already skull-stripped (e.g. OASIS T88 masked images)")
     ap.add_argument("--no_neck_crop", action="store_true")
     ap.add_argument("--bet_f", type=float, default=0.6, help="BET fractional threshold (higher = tighter mask)")
     ap.add_argument("--min_extent_mm", type=float, default=100.0, help="reject truncated series")

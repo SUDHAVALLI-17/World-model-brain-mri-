@@ -32,8 +32,8 @@ def head(shape, atrophy, rng):
     return np.clip(vol * bias + rng.normal(0, 0.03, shape), 0, None) * 1000
 
 
-SITES = ["002", "011", "023", "941"]
-SCANNER = {"002": (1.0, 5), "011": (0.8, 25), "023": (1.25, 10), "941": (0.9, 40)}
+SITES = ["002", "011", "023", "941", "128", "305"]
+SCANNER = {"002": (1.0, 5), "011": (0.8, 25), "023": (1.25, 10), "941": (0.9, 40), "128": (1.1, 15), "305": (0.85, 30)}
 
 
 def main():
@@ -41,6 +41,10 @@ def main():
     ap.add_argument("--out", default="data_synth")
     ap.add_argument("--subjects", type=int, default=30)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--min_visits", type=int, default=1)
+    ap.add_argument("--max_visits", type=int, default=3)
+    ap.add_argument("--spread", type=float, default=0.15,
+                    help="between-subject spread of baseline atrophy (larger = classes overlap more)")
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
     rows, iid = [], 10000
@@ -50,12 +54,12 @@ def main():
         site = SITES[s % len(SITES)]
         subj = f"{site}_S_{1000 + s:04d}"
         sex, age = rng.choice(["M", "F"]), float(rng.integers(60, 88))
-        base = {"CN": 0.0, "MCI": 0.6, "AD": 1.2}[g] + rng.normal(0, 0.15)
-        rate = {"CN": 0.02, "MCI": 0.12, "AD": 0.25}[g]
-        n_vis = int(rng.integers(1, 4))
+        base = max(0.0, {"CN": 0.0, "MCI": 0.6, "AD": 1.2}[g] + rng.normal(0, a.spread))
+        rate = max(0.0, {"CN": 0.02, "MCI": 0.12, "AD": 0.25}[g] * rng.lognormal(0, 0.4))
+        n_vis = int(rng.integers(a.min_visits, a.max_visits + 1))
         for v in range(n_vis):
             iid += 1
-            yrs = [0, 1, 2][v]
+            yrs = [0, 1, 2, 3, 4][v]
             date = pd.Timestamp("2006-03-01") + pd.Timedelta(days=int(365.25 * yrs + s * 3))
             vol = head((96, 110, 96), max(0, base + rate * yrs), rng)
             gam, noise = SCANNER[site]  # site-specific contrast + noise: the confound to debias
@@ -67,7 +71,7 @@ def main():
             os.makedirs(d, exist_ok=True)
             sitk.WriteImage(img, os.path.join(d, f"ADNI_{subj}_MR_MPRAGE_br_raw_S{iid}_I{iid}.nii.gz"))
             rows.append({"Image Data ID": f"I{iid}", "Subject": subj, "Group": g, "Sex": sex,
-                         "Age": age + yrs, "Visit": ["sc", "m12", "m24"][v], "Modality": "MRI",
+                         "Age": age + yrs, "Visit": ["sc", "m12", "m24", "m36", "m48"][v], "Modality": "MRI",
                          "Description": "MPRAGE", "Type": "Original",
                          "Acq Date": date.strftime("%m/%d/%Y"), "Format": "NiFTI"})
     pd.DataFrame(rows).to_csv(os.path.join(a.out, "raw", "IDA_collection.csv"), index=False)

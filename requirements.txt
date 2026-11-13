@@ -10,3 +10,4 @@ nibabel
 brainextractor
 tabulate
 joblib
+openpyxl

@@ -8,15 +8,23 @@
 #   META_CSV  IDA collection CSV          XML_DIR  IDA per-image metadata XMLs
 #   MRI_KEY   All_Subjects_Key_MRI csv    DXSUM    Diagnostic Summary / ADNIMERGE (per-visit labels)
 #
+# OASIS instead of ADNI (OASIS-1 and/or OASIS-2 from oasis-brains.org):
+#   DATASET=oasis OASIS2_DIR=data/raw/OASIS2 OASIS2_CSV=oasis_longitudinal.csv \
+#   OASIS1_DIR=data/raw/OASIS1 OASIS1_CSV=oasis_cross-sectional.csv bash run_all.sh
+#
 # SMOKE=1 runs every stage for 1-3 epochs on whatever data you have (tiny subsets allowed,
 # all subjects in every split) - to check the code runs, NOT to get results.
 set -euo pipefail
-RAW=${RAW:?set RAW=folder that contains the ADNI/ image tree}
+DATASET=${DATASET:-adni}
+OASIS1_DIR=${OASIS1_DIR:-}; OASIS1_CSV=${OASIS1_CSV:-}; OASIS2_DIR=${OASIS2_DIR:-}; OASIS2_CSV=${OASIS2_CSV:-}
+if [ "$DATASET" = adni ]; then RAW=${RAW:?set RAW=folder that contains the ADNI/ image tree}; fi
 META_CSV=${META_CSV:-}; XML_DIR=${XML_DIR:-}; MRI_KEY=${MRI_KEY:-}; DXSUM=${DXSUM:-}
 TARGET=${TARGET:-96}        # 64 for CPU
 FOLDS=${FOLDS:-5}
 KEY=${KEY:-$HOME/.adni.key}
 DEBIAS=${DEBIAS:-scanner}   # scanner (vendor + field strength) or site
+# OASIS-1/2 used one scanner (Siemens 1.5T), so there is no scanner bias to remove
+if [ "$DATASET" = oasis ]; then DEBIAS=${DEBIAS_OASIS:-none}; fi
 SMOKE=${SMOKE:-0}
 if [ "$SMOKE" = 1 ]; then
   EP_PRE=2; EP_CLS=3; SPLIT_FLAG=--smoke; QUICK="--bs 2 --freeze_epochs 1 --eps_ramp 1 --pgd_steps 2"
@@ -27,9 +35,14 @@ fi
 D=data; mkdir -p $D runs
 [ -f "$KEY" ] || python src/secure_io.py genkey --key_file "$KEY"
 
-python src/prepare_index.py --raw_dir "$RAW" --desc_regex "MPRAGE|MP-RAGE|SPGR" --keep_repeats \
-  ${META_CSV:+--meta_csv "$META_CSV"} ${XML_DIR:+--meta_xml_dir "$XML_DIR"} \
-  ${MRI_KEY:+--mri_key "$MRI_KEY"} ${DXSUM:+--dxsum "$DXSUM"} --out $D/index.csv
+if [ "$DATASET" = oasis ]; then
+  python src/prepare_oasis.py ${OASIS1_DIR:+--oasis1_dir "$OASIS1_DIR" --oasis1_csv "$OASIS1_CSV"} \
+    ${OASIS2_DIR:+--oasis2_dir "$OASIS2_DIR" --oasis2_csv "$OASIS2_CSV"} --out $D/index.csv
+else
+  python src/prepare_index.py --raw_dir "$RAW" --desc_regex "MPRAGE|MP-RAGE|SPGR" --keep_repeats \
+    ${META_CSV:+--meta_csv "$META_CSV"} ${XML_DIR:+--meta_xml_dir "$XML_DIR"} \
+    ${MRI_KEY:+--mri_key "$MRI_KEY"} ${DXSUM:+--dxsum "$DXSUM"} --out $D/index.csv
+fi
 
 python src/preprocess.py --index $D/index.csv --out_dir $D/proc \
   --target "$TARGET" --spacing 1.5 --skullstrip auto --qc --encrypt --key_file "$KEY"
