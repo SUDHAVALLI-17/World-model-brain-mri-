@@ -113,17 +113,27 @@ def bet_mask(img, f=0.6):
     return sitk.BinaryFillhole(m)
 
 
+def head_top_index(img):
+    """Index of the highest axial slice (axis 2 after RAS orientation) that contains head.
+    The head is the largest Otsu foreground component, so background noise, ghosting or a
+    bright edge of the field of view cannot pull the estimate above the scalp."""
+    fg = sitk.OtsuThreshold(img, 0, 1, 200)
+    cc = sitk.RelabelComponent(sitk.ConnectedComponent(fg), sortByObjectSize=True)
+    head = sitk.GetArrayViewFromImage(cc) == 1          # numpy (z, y, x); z = superior axis
+    area = head.reshape(head.shape[0], -1).sum(1)
+    rows = np.where(area > 0.02 * max(1, area.max()))[0]
+    return int(rows.max()) if len(rows) else None
+
+
 def crop_neck(img, keep_mm=170.0):
     """Keep only the top `keep_mm` of the head along the superior axis (like FSL robustfov).
-    ADNI sagittal MPRAGEs include a lot of neck, which otherwise pulls skull stripping down."""
-    arr = sitk.GetArrayViewFromImage(img)
-    head = arr > np.percentile(arr, 60)
-    rows = np.where(head.reshape(head.shape[0], -1).mean(1) > 0.01)[0]
-    if len(rows) == 0:
-        return img
-    top = int(rows.max())
+    ADNI sagittal MPRAGEs include a lot of neck, which otherwise pulls skull stripping down.
+    Returns (cropped image, lowest kept slice index, top slice index)."""
+    top = head_top_index(img)
+    if top is None:
+        return img, 0, img.GetSize()[2] - 1
     lo = max(0, top - int(keep_mm / img.GetSpacing()[2]))
-    return img[:, :, lo:top + 1]
+    return img[:, :, lo:top + 1], lo, top
 
 
 def pick_stripper(choice):
@@ -168,7 +178,8 @@ def save_qc(arr, path):
         import matplotlib.pyplot as plt
     except ImportError:
         return
-    c = [s // 2 for s in arr.shape]
+    nz = np.argwhere(arr > 0)
+    c = [int(v) for v in nz.mean(0)] if len(nz) else [s // 2 for s in arr.shape]  # brain centre
     fig, ax = plt.subplots(1, 3, figsize=(9, 3))
     for a, sl in zip(ax, [arr[c[0]], arr[:, c[1]], arr[:, :, c[2]]]):
         a.imshow(np.flipud(sl), cmap="gray")
@@ -205,29 +216,7 @@ def process_one(row, a):
     if a.resume and os.path.exists(out) and os.path.exists(side):  # done in an earlier session
         meta = json.load(open(side))
         return out, meta["tool"], meta["brain_ml"]
-    img = apply_geometry(read_image(row["path"], bool(row["is_dicom"])), row.get("geometry"))
-    extent = [sz * sp for sz, sp in zip(img.GetSize(), img.GetSpacing())]
-    if min(extent) < a.min_extent_mm:  # e.g. an interrupted download with 20 of 170 slices
-        raise ValueError(f"truncated series: extent {[round(e) for e in extent]} mm < {a.min_extent_mm} mm")
-    img = sitk.DICOMOrient(img, "RAS")
-    if not a.no_n4:
-        img = n4_correct(img)
-    img = resample_iso(img, a.spacing)
-    if not a.no_denoise:
-        img = sitk.CurvatureAnisotropicDiffusion(img, timeStep=0.03, conductanceParameter=1.5,
-                                                 numberOfIterations=5)
-    if not a.no_neck_crop:
-        img = crop_neck(img)
-    tool = pick_stripper(a.skullstrip)
-    if tool in ("synthstrip", "hdbet"):
-        m = external_mask(img, tool)
-    elif tool == "bet":
-        m = bet_mask(img, a.bet_f)
-    elif tool == "premasked":  # already skull-stripped: brain = non-background voxels
-        mx = float(sitk.GetArrayViewFromImage(img).max())
-        m = sitk.BinaryFillhole(sitk.Cast(img > 0.02 * mx, sitk.sitkUInt8))
-    else:
-        m = otsu_mask(img)
+    img, m, tool, _ = prepare_and_mask(row, a)
     arr = sitk.GetArrayFromImage(img)
     mask = sitk.GetArrayFromImage(m).astype(bool)
     brain_ml = float(mask.sum() * np.prod(img.GetSpacing()) / 1000)
@@ -245,6 +234,40 @@ def process_one(row, a):
         save_qc(vol.astype(np.float32), os.path.join(a.out_dir, "qc", f"{row['image_id']}.png"))
     json.dump({"tool": tool, "brain_ml": brain_ml}, open(side, "w"))
     return out, tool, brain_ml
+
+
+def prepare_and_mask(row, a):
+    """Read, orient, bias-correct, resample, denoise, (neck-crop) and skull-strip one scan.
+    Returns (image, brain mask, stripper used, info) - the image is before crop/resize, so
+    qc_mask.py can draw the mask on exactly what the model pipeline used."""
+    img = apply_geometry(read_image(row["path"], bool(row["is_dicom"])), row.get("geometry"))
+    extent = [sz * sp for sz, sp in zip(img.GetSize(), img.GetSpacing())]
+    if min(extent) < a.min_extent_mm:  # e.g. an interrupted download with 20 of 170 slices
+        raise ValueError(f"truncated series: extent {[round(e) for e in extent]} mm < {a.min_extent_mm} mm")
+    img = sitk.DICOMOrient(img, "RAS")
+    if not a.no_n4:
+        img = n4_correct(img)
+    img = resample_iso(img, a.spacing)
+    if not a.no_denoise:
+        img = sitk.CurvatureAnisotropicDiffusion(img, timeStep=0.03, conductanceParameter=1.5,
+                                                 numberOfIterations=5)
+    info = {"neck_crop": None}
+    if not a.no_neck_crop:
+        n_before = img.GetSize()[2]
+        img, lo, top = crop_neck(img)
+        info["neck_crop"] = {"slices_before": n_before, "kept_from": lo, "head_top": top,
+                             "spacing_mm": img.GetSpacing()[2]}
+    tool = pick_stripper(a.skullstrip)
+    if tool in ("synthstrip", "hdbet"):
+        m = external_mask(img, tool)
+    elif tool == "bet":
+        m = bet_mask(img, a.bet_f)
+    elif tool == "premasked":  # already skull-stripped: brain = non-background voxels
+        mx = float(sitk.GetArrayViewFromImage(img).max())
+        m = sitk.BinaryFillhole(sitk.Cast(img > 0.02 * mx, sitk.sitkUInt8))
+    else:
+        m = otsu_mask(img)
+    return img, m, tool, info
 
 
 def main():

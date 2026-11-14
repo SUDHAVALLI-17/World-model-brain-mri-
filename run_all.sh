@@ -20,6 +20,8 @@
 #   TRAIN_FOLDS=5  how many CV folds to train (1 = fold 0 only, quickest)
 #   MODELSET=all   all | core   (core = cls, cls_adv, p1_nometa, p1_full: enough for the main tables)
 #   TARGET=96      volume size (64 for CPU-only machines)
+#   PREP_FLAGS=""  extra preprocessing options, e.g. "--no_neck_crop" or "--bet_f 0.5";
+#                  check the result first with: python src/qc_mask.py --index $DATA/index.csv --compare_neck
 set -euo pipefail
 DATASET=${DATASET:-oasis}
 OASIS1_DIR=${OASIS1_DIR:-}; OASIS1_CSV=${OASIS1_CSV:-}; OASIS2_DIR=${OASIS2_DIR:-}; OASIS2_CSV=${OASIS2_CSV:-}
@@ -30,6 +32,7 @@ elif [ -z "$OASIS2_DIR$OASIS1_DIR" ]; then
   echo "set OASIS2_DIR and OASIS2_CSV (and/or OASIS1_DIR, OASIS1_CSV)"; exit 1
 fi
 TARGET=${TARGET:-96}
+PREP_FLAGS=${PREP_FLAGS:-}
 FOLDS=${FOLDS:-5}
 DATA=${DATA:-data}; RUNS=${RUNS:-runs}; MODELS=${MODELS:-models}
 KEY=${KEY:-$HOME/.wm_data.key}
@@ -70,7 +73,7 @@ else
     ${MRI_KEY:+--mri_key "$MRI_KEY"} ${DXSUM:+--dxsum "$DXSUM"} --out "$DATA/index.csv"
 fi
 step "$DATA" preprocess python src/preprocess.py --index "$DATA/index.csv" --out_dir "$DATA/proc" \
-  --target "$TARGET" --spacing 1.5 --skullstrip auto --qc --encrypt --key_file "$KEY" --resume
+  --target "$TARGET" --spacing 1.5 --skullstrip auto --qc --encrypt --key_file "$KEY" --resume ${PREP_FLAGS:-}
 python src/secure_io.py verify --manifest "$DATA/proc/manifest.json"
 step "$DATA" sign python src/metadata_guard.py sign --index "$DATA/proc/index_proc.csv" --key_file "$KEY"
 python src/metadata_guard.py check --index "$DATA/proc/index_proc.csv"
