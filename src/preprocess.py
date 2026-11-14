@@ -77,18 +77,35 @@ def otsu_mask(img):
     return sitk.BinaryFillhole(m)
 
 
+_HDBET = None
+
+
+def _hdbet_predictor():
+    """HD-BET 2.x model, loaded once per worker process (GPU if available)."""
+    global _HDBET
+    if _HDBET is None:
+        import torch
+        from HD_BET.checkpoint_download import maybe_download_parameters
+        from HD_BET.hd_bet_prediction import get_hdbet_predictor
+        maybe_download_parameters()
+        dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        _HDBET = get_hdbet_predictor(use_tta=False, device=dev, verbose=False)
+    return _HDBET
+
+
 def external_mask(img, tool):
-    """Deep-learning skull stripping via SynthStrip or HD-BET command-line tools."""
+    """Deep-learning skull stripping: SynthStrip (FreeSurfer command) or HD-BET (pip install hd-bet)."""
     with tempfile.TemporaryDirectory() as td:
         src, out, msk = (os.path.join(td, n) for n in ("in.nii.gz", "out.nii.gz", "mask.nii.gz"))
         sitk.WriteImage(img, src)
         if tool == "synthstrip":
             subprocess.run(["mri_synthstrip", "-i", src, "-o", out, "-m", msk], check=True,
                            capture_output=True)
-        else:  # hd-bet
-            subprocess.run(["hd-bet", "-i", src, "-o", out, "-device", "cpu", "-mode", "fast", "-tta", "0"],
-                           check=True, capture_output=True)
-            msk = out.replace(".nii.gz", "_mask.nii.gz")
+        else:  # HD-BET 2.x Python API; writes the mask as <out>_bet.nii.gz
+            from HD_BET.hd_bet_prediction import hdbet_predict
+            hdbet_predict(src, out, _hdbet_predictor(), keep_brain_mask=True,
+                          compute_brain_extracted_image=False)
+            msk = out[:-7] + "_bet.nii.gz"
         m = sitk.ReadImage(msk)
         m.CopyInformation(img)
         return sitk.Cast(m > 0, sitk.sitkUInt8)
@@ -136,13 +153,27 @@ def crop_neck(img, keep_mm=170.0):
     return img[:, :, lo:top + 1], lo, top
 
 
+def mask_gap_mm(img, mask_img):
+    """Distance from the top of the head to the top of the brain mask (mm). Skull + scalp is
+    usually 8-25 mm; much more means the mask has slipped down (missing the top of the brain)."""
+    top = head_top_index(img)
+    m = sitk.GetArrayViewFromImage(mask_img)
+    rows = np.where(m.reshape(m.shape[0], -1).any(1))[0]
+    if top is None or not len(rows):
+        return None
+    return float((top - rows.max()) * img.GetSpacing()[2])
+
+
 def pick_stripper(choice):
     if choice != "auto":
         return choice
     if shutil.which("mri_synthstrip"):
         return "synthstrip"
-    if shutil.which("hd-bet"):
+    try:
+        import HD_BET  # noqa: F401  (pip install hd-bet)
         return "hdbet"
+    except ImportError:
+        pass
     try:
         import brainextractor  # noqa: F401
         return "bet"
@@ -217,6 +248,10 @@ def process_one(row, a):
         meta = json.load(open(side))
         return out, meta["tool"], meta["brain_ml"]
     img, m, tool, _ = prepare_and_mask(row, a)
+    gap = mask_gap_mm(img, m)
+    if gap is not None and gap > a.max_top_gap_mm:
+        raise ValueError(f"brain mask top is {gap:.0f} mm below the top of the head (> {a.max_top_gap_mm:g}) - "
+                         "skull stripping missed the upper brain; check with qc_mask.py")
     arr = sitk.GetArrayFromImage(img)
     mask = sitk.GetArrayFromImage(m).astype(bool)
     brain_ml = float(mask.sum() * np.prod(img.GetSpacing()) / 1000)
@@ -284,6 +319,8 @@ def main():
     ap.add_argument("--brain_ml_range", type=float, nargs=2, default=[900, 2000],
                     help="QC: flag masks whose volume (ml) is outside this range")
     ap.add_argument("--no_n4", action="store_true", help="skip if you downloaded N3m-corrected images")
+    ap.add_argument("--max_top_gap_mm", type=float, default=35.0,
+                    help="reject scans whose brain mask stops this far below the top of the head")
     ap.add_argument("--no_denoise", action="store_true")
     ap.add_argument("--encrypt", action="store_true", help="AES-encrypt volumes at rest")
     ap.add_argument("--key_file", default=None)

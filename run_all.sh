@@ -20,7 +20,7 @@
 #   TRAIN_FOLDS=5  how many CV folds to train (1 = fold 0 only, quickest)
 #   MODELSET=all   all | core   (core = cls, cls_adv, p1_nometa, p1_full: enough for the main tables)
 #   TARGET=96      volume size (64 for CPU-only machines)
-#   PREP_FLAGS=""  extra preprocessing options, e.g. "--no_neck_crop" or "--bet_f 0.5";
+#   PREP_FLAGS=""  extra preprocessing options, e.g. "--no_neck_crop", "--skullstrip hdbet", "--bet_f 0.5";
 #                  check the result first with: python src/qc_mask.py --index $DATA/index.csv --compare_neck
 set -euo pipefail
 DATASET=${DATASET:-oasis}

@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 import SimpleITK as sitk
 
-from preprocess import apply_geometry, crop_neck, prepare_and_mask, read_image
+from preprocess import apply_geometry, crop_neck, mask_gap_mm, prepare_and_mask, read_image
 
 
 def _header_info(path):
@@ -70,6 +70,9 @@ def qc_one(row, a, tag, out_dir):
     zz, yy, xx = np.where(mask) if mask.any() else (np.array([0]),) * 3
     size_mm = [(v.max() - v.min() + 1) * sp for v in (xx, yy, zz)]
     warn = []
+    gap = mask_gap_mm(img, m)
+    if gap is not None and gap > 35:
+        warn.append(f"mask top {gap:.0f} mm below top of head (expect 8-25): upper brain missed")
     if not 900 <= ml <= 2000:
         warn.append(f"volume {ml:.0f} ml outside 900-2000")
     if not opts.no_neck_crop and zz.min() <= 1:
@@ -123,7 +126,8 @@ def qc_one(row, a, tag, out_dir):
     plt.close(fig)
     return {"image_id": row["image_id"], "setting": tag or ("no_neck_crop" if opts.no_neck_crop else "neck_crop"),
             "stripper": tool, "mask_ml": round(ml, 1), "lr_mm": round(size_mm[0]), "ap_mm": round(size_mm[1]),
-            "si_mm": round(size_mm[2]), "neck_crop": info.get("neck_crop"), "warnings": "; ".join(warn),
+            "si_mm": round(size_mm[2]), "top_gap_mm": None if gap is None else round(gap),
+            "neck_crop": info.get("neck_crop"), "warnings": "; ".join(warn),
             "png": name}
 
 
@@ -151,7 +155,8 @@ def main():
             res = qc_one(r, a, tag, a.out)
             rows.append(res)
             print(f"{res['image_id']:<18} {res['setting']:<13} {res['stripper']:<6} {res['mask_ml']:>7.0f} ml  "
-                  f"L-R {res['lr_mm']} A-P {res['ap_mm']} S-I {res['si_mm']} mm  {res['warnings']}")
+                  f"L-R {res['lr_mm']} A-P {res['ap_mm']} S-I {res['si_mm']} mm  top gap {res['top_gap_mm']} mm  "
+                  f"{res['warnings']}")
     pd.DataFrame(rows).to_csv(os.path.join(a.out, "qc_mask.csv"), index=False)
     print(f"-> {a.out}/  (one PNG per scan and setting, plus qc_mask.csv)")
 

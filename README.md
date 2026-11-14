@@ -121,7 +121,8 @@ in `common.py` and `action_dim`.
 pip install -r requirements.txt
 # skull stripping is auto-detected in this order:
 #   1. SynthStrip (FreeSurfer: mri_synthstrip)   - best, recommended for the paper
-#   2. HD-BET (pip install hd-bet)               - downloads model weights on first use
+#   2. HD-BET 2.x (pip install hd-bet)           - deep learning, GPU; recommended on Colab/OASIS
+#      (downloads model weights on first use)
 #   3. BET-style surface fit (pip install brainextractor) - no weights; default fallback
 #   4. Otsu threshold + morphology               - last resort, often keeps skull on real ADNI
 # Before any of them, the neck is cropped (top 170 mm kept, like FSL robustfov) because ADNI
