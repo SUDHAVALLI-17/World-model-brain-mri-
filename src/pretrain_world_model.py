@@ -26,6 +26,7 @@ def main():
     ap.add_argument("--index", default="data/proc/index_proc.csv")
     ap.add_argument("--splits", default="data/splits.json")
     ap.add_argument("--out", default="runs/pretrain")
+    ap.add_argument("--resume", action="store_true", help="continue from <out>/last.pt if it exists")
     ap.add_argument("--epochs", type=int, default=150)
     ap.add_argument("--bs", type=int, default=4)
     ap.add_argument("--accum", type=int, default=2, help="gradient accumulation steps")
@@ -77,8 +78,17 @@ def main():
 
     steps_per_epoch = max(1, len(dl) // a.accum)
     total = a.epochs * steps_per_epoch
-    step, best = 0, math.inf
-    for ep in range(a.epochs):
+    step, best, start = 0, math.inf, 0
+    last = os.path.join(a.out, "last.pt")
+    if a.resume and os.path.exists(last):  # continue after a Colab/Kaggle disconnect
+        ck = torch.load(last, map_location=dev, weights_only=False)
+        if "opt" in ck:
+            model.load_state_dict(ck["model"])
+            opt.load_state_dict(ck["opt"])
+            scaler.load_state_dict(ck["scaler"])
+            step, best, start = ck["step"], ck["best"], ck["epoch"]
+            log.info("resumed from %s at epoch %d", last, start)
+    for ep in range(start, a.epochs):
         model.train()
         t0, agg, n = time.time(), {}, 0
         opt.zero_grad(set_to_none=True)
@@ -111,10 +121,12 @@ def main():
         log.info("ep %3d | %s | %.0fs", ep + 1, " ".join(f"{k}={v:.4f}" for k, v in agg.items()),
                  time.time() - t0)
         ckpt = {"model": model.state_dict(), "cfg": model.cfg, "epoch": ep + 1, "args": vars(a)}
-        torch.save(ckpt, os.path.join(a.out, "last.pt"))
         if agg["loss"] < best:
             best = agg["loss"]
             torch.save(ckpt, os.path.join(a.out, "best.pt"))
+        torch.save({**ckpt, "opt": opt.state_dict(), "scaler": scaler.state_dict(), "step": step, "best": best},
+                   last + ".tmp")
+        os.replace(last + ".tmp", last)  # atomic: a disconnect mid-save never corrupts last.pt
     log.info("done - checkpoint: %s", os.path.join(a.out, "last.pt"))
 
 

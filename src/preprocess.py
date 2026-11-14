@@ -17,6 +17,7 @@ Example:
       --target 96 --spacing 1.5 --skullstrip auto --workers 4
 """
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -177,9 +178,34 @@ def save_qc(arr, path):
     plt.close(fig)
 
 
+# OASIS-1/2 raw MPRAGE (Analyze 7.5, 256x256x128, 1x1x1.25 mm, sagittal) carries no reliable
+# orientation. Voxel axis i runs posterior->anterior, j inferior->superior, k across hemispheres
+# (sform 0 0 -1.25 / 1 0 0 / 0 1 0, see brainder.org "OASIS brains"). Written as an ITK (LPS)
+# direction matrix whose columns are the physical directions of axes i, j, k:
+OASIS_RAW_DIRECTION = (0.0, 0.0, 1.0,
+                       -1.0, 0.0, 0.0,
+                       0.0, 1.0, 0.0)
+
+
+def apply_geometry(img, geometry):
+    if str(geometry) == "oasis_raw" and img.GetDimension() == 3:
+        img.SetDirection(OASIS_RAW_DIRECTION)
+        img.SetOrigin((0.0, 0.0, 0.0))
+    return img
+
+
+def _out_path(row, a):
+    out = os.path.join(a.out_dir, "vols", f"{row['image_id']}.npy")
+    return out + ".enc" if a.encrypt else out
+
+
 def process_one(row, a):
     sitk.ProcessObject_SetGlobalDefaultNumberOfThreads(a.threads)
-    img = read_image(row["path"], bool(row["is_dicom"]))
+    out, side = _out_path(row, a), _out_path(row, a) + ".json"
+    if a.resume and os.path.exists(out) and os.path.exists(side):  # done in an earlier session
+        meta = json.load(open(side))
+        return out, meta["tool"], meta["brain_ml"]
+    img = apply_geometry(read_image(row["path"], bool(row["is_dicom"])), row.get("geometry"))
     extent = [sz * sp for sz, sp in zip(img.GetSize(), img.GetSpacing())]
     if min(extent) < a.min_extent_mm:  # e.g. an interrupted download with 20 of 170 slices
         raise ValueError(f"truncated series: extent {[round(e) for e in extent]} mm < {a.min_extent_mm} mm")
@@ -210,15 +236,14 @@ def process_one(row, a):
     arr, mask = crop_pad_resize(arr, mask, a.target)
     vol = normalize(arr, mask).astype(np.float16)
 
-    out = os.path.join(a.out_dir, "vols", f"{row['image_id']}.npy")
     if a.encrypt:
         from secure_io import load_key, save_encrypted
-        out += ".enc"
         save_encrypted(out, vol, load_key(a.key_file))
     else:
         np.save(out, vol)
     if a.qc:
         save_qc(vol.astype(np.float32), os.path.join(a.out_dir, "qc", f"{row['image_id']}.png"))
+    json.dump({"tool": tool, "brain_ml": brain_ml}, open(side, "w"))
     return out, tool, brain_ml
 
 
@@ -240,6 +265,7 @@ def main():
     ap.add_argument("--encrypt", action="store_true", help="AES-encrypt volumes at rest")
     ap.add_argument("--key_file", default=None)
     ap.add_argument("--qc", action="store_true")
+    ap.add_argument("--resume", action="store_true", help="skip scans already preprocessed (e.g. after a Colab disconnect)")
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--threads", type=int, default=2, help="ITK threads per worker")
     a = ap.parse_args()

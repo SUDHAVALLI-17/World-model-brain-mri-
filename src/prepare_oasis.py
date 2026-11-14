@@ -89,7 +89,8 @@ def oasis1(root, csv, image, scan, min_age, include_reliability):
                      "mmscore": r.get("MMSE"), "cdglobal": r.get("CDR"), "educ": r.get("Educ"),
                      "etiv": r.get("eTIV"), "nwbv": r.get("nWBV"), "dataset": "OASIS-1",
                      "manufacturer": "SIEMENS", "scanner_manufacturer": "SIEMENS",
-                     "field_strength": 1.5, "magnetic_field_strength": 1.5, "label": lab})
+                     "field_strength": 1.5, "magnetic_field_strength": 1.5, "label": lab,
+                     "geometry": "" if image == "t88" else "oasis_raw"})
     return rows, missing
 
 
@@ -114,7 +115,8 @@ def oasis2(root, csv, scan):
                      "description": "MPRAGE", "mmscore": r.get("MMSE"), "cdglobal": r.get("CDR"),
                      "educ": r.get("EDUC"), "etiv": r.get("eTIV"), "nwbv": r.get("nWBV"), "dataset": "OASIS-2",
                      "manufacturer": "SIEMENS", "scanner_manufacturer": "SIEMENS",
-                     "field_strength": 1.5, "magnetic_field_strength": 1.5, "label": lab})
+                     "field_strength": 1.5, "magnetic_field_strength": 1.5, "label": lab,
+                     "geometry": "oasis_raw"})
     return rows, missing
 
 

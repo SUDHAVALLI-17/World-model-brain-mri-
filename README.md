@@ -1,6 +1,50 @@
-# ADNI Brain-MRI World Model: CN / MCI / AD classification
+# Brain-MRI World Model: CN / MCI / AD classification (OASIS-2 or ADNI)
 
-A self-supervised **world model** for T1 brain MRI, designed for a small ADNI subset.
+A self-supervised **world model** for T1 brain MRI. The default dataset is **OASIS-2**
+(longitudinal, free from oasis-brains.org); ADNI is still supported with `DATASET=adni`.
+
+## Quick start on OASIS-2
+
+**Easiest: Google Colab.** Open `notebooks/colab_oasis2.ipynb` in Colab (File → Open notebook →
+GitHub → this repository), choose a T4 GPU, paste the two OASIS-2 download links and run the
+cells. Preprocessed data, checkpoints and results are kept on Google Drive, and every step can be
+re-run after a disconnect: finished stages are skipped, preprocessing skips finished scans and the
+world model continues from its last epoch.
+
+**What OASIS-2 looks like and how it is handled**
+
+| | OASIS-2 | What the code does |
+|---|---|---|
+| Download | `OAS2_RAW_PART1.tar.gz` (10 GB) + `PART2` (8 GB) + Demographic Data (.xlsx) | the notebook extracts only `mpr-1` of each session (one T1 is enough), about a quarter of the data |
+| Layout | `OAS2_0001_MR1/RAW/mpr-1..4` as `.hdr` + `.img` pairs (Analyze-style) | `prepare_oasis.py` finds every session folder recursively |
+| Scans | 150 people aged 60-96, 373 sessions, 2-5 visits at least a year apart; 3-4 repeat T1s per session, 256×256×128, 1×1×1.25 mm, sagittal | one scan per session; every visit pair becomes a world-model transition |
+| Orientation | Analyze headers do not store it reliably | known OASIS geometry is applied before RAS reorientation (`geometry=oasis_raw`) |
+| Labels | CDR per visit (0, 0.5, 1, 2); groups Nondemented / Demented / Converted | CDR 0 → CN, 0.5 → MCI (very mild), ≥ 1 → AD |
+| Time and action | `MR Delay` = days since the first visit; `Age`, `M/F` per visit | Δt, age and sex for the action; visit order is exact |
+| Scanner | one Siemens 1.5 T scanner | scanner debiasing switched off; DICOM header detector skipped (no DICOM headers) |
+| Extra | `nWBV` (normalised whole-brain volume) per visit | can check the predicted atrophy against measured brain loss |
+
+After preprocessing each scan is a 96³ volume of about 3.5 MB, so the whole training set is about
+1.3 GB.
+
+**Command line** (any machine with a GPU):
+
+```bash
+OASIS2_DIR=data/raw/OASIS2 OASIS2_CSV=oasis_longitudinal_demographics.xlsx SMOKE=1 bash run_all.sh   # 20-30 min check
+OASIS2_DIR=data/raw/OASIS2 OASIS2_CSV=oasis_longitudinal_demographics.xlsx TRAIN_FOLDS=1 MODELSET=core bash run_all.sh
+```
+
+`TRAIN_FOLDS=1 MODELSET=core` is the quickest real run (fold 0; standard, adversarial,
+image-only and combined models). `TRAIN_FOLDS=5 MODELSET=all` is the full paper setup.
+`DATA=`, `RUNS=` and `MODELS=` choose where outputs go. Single-visit OASIS-1 can be added with
+`OASIS1_DIR=` and `OASIS1_CSV=` for extra pretraining data.
+
+---
+
+The rest of this README describes the method. It was written for ADNI; everything applies to
+OASIS-2 except the ADNI-specific download and table steps.
+
+The model was designed for a small subset.
 It learns brain anatomy without labels (3D JEPA) and learns how a brain changes
 over time (an **action-conditioned latent dynamics model**). A classifier then uses
 the current latent state *plus imagined future states* to predict CN, MCI or AD.

@@ -23,3 +23,10 @@ deploy/aws/rendered/
 __pycache__/
 *.pyc
 .venv/
+# OASIS data (OASIS Data Use Terms: do not redistribute)
+*.hdr
+*.img
+*.tar.gz
+oasis_*.csv
+*demographics*.xls*
+*.xlsx
