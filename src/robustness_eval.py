@@ -168,6 +168,8 @@ def main():
         paths = sorted(glob.glob(pattern))
         assert paths, f"no checkpoints for {name}: {pattern}"
         folds = [load_classifier(p, dev) for p in paths]
+        if any(m.task != "3class" or m.extra_feats for m in folds):
+            raise SystemExit(f"{name}: robustness evaluation expects 3-class models without --extra_feats")
         ens = Ensemble(folds).to(dev).eval()
         log.info("== %s: ensemble of %d models", name, len(paths))
 

@@ -22,7 +22,7 @@ from adversarial import _project, brain_mask
 
 def make_action(demo, dt_years):
     """demo = [age_n, sex] (B,2) -> action [dt/2, age_n, sex]."""
-    return torch.cat([torch.full_like(demo[:, :1], dt_years / 2.0), demo], 1)
+    return torch.cat([torch.full_like(demo[:, :1], dt_years / 2.0), demo[:, :2]], 1)
 
 
 def readouts(wm, x, action):

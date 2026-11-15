@@ -8,13 +8,19 @@ Per scan:
   5. edge-preserving denoising (curvature anisotropic diffusion)
   6. brain/head mask: SynthStrip or HD-BET if installed, else Otsu threshold
      + morphology (opening, largest connected component, closing, hole fill)
-  7. crop to mask, pad to cube, resize to target^3
+  7. crop to mask, pad to cube, resize to target^3   (--crop brain, default)
+     or: a fixed physical box (--crop_mm) centred on the brain, resized to target^3 (--crop fixed);
+     this keeps every brain at the same mm scale, so a shrunken brain stays smaller in the cube
   8. intensity windowing (0.5-99.5 pct inside mask) -> [0, 1], background 0
   9. save float16 .npy (optionally AES-encrypted) + QC png
 
 Example:
   python src/preprocess.py --index data/index.csv --out_dir data/proc \
       --target 96 --spacing 1.5 --skullstrip auto --workers 4
+
+Stage-1 cache (--stage1_dir): saves each skull-stripped 1.5 mm image + mask before cropping, so a
+later change of crop or size reuses it and does not run HD-BET again:
+  python src/preprocess.py ... --stage1_dir data/stage1 --crop fixed --out_dir data/proc_fixed
 """
 import argparse
 import json
@@ -195,6 +201,30 @@ def crop_pad_resize(arr, mask, target, margin=2):
     return zoom(arr, f, order=1), zoom(mask.astype(np.uint8), f, order=0).astype(bool)
 
 
+def crop_fixed_resize(arr, mask, target, spacing, crop_mm, max_outside=0.01):
+    """Fixed physical field of view: a crop_mm cube centred on the mask centroid, resized to target^3.
+    Unlike crop_pad_resize, every brain keeps the same mm-per-voxel, so whole-brain atrophy (a smaller
+    brain inside the same box) stays visible to the network."""
+    side = int(round(crop_mm / spacing))
+    c = np.round(np.argwhere(mask).mean(0)).astype(int)
+    lo = c - side // 2
+    src_lo, src_hi = np.maximum(lo, 0), np.minimum(lo + side, arr.shape)
+    dst_lo = src_lo - lo
+    dst_hi = dst_lo + (src_hi - src_lo)
+    box = np.zeros((side,) * 3, arr.dtype)
+    mbox = np.zeros((side,) * 3, bool)
+    box[dst_lo[0]:dst_hi[0], dst_lo[1]:dst_hi[1], dst_lo[2]:dst_hi[2]] = \
+        arr[src_lo[0]:src_hi[0], src_lo[1]:src_hi[1], src_lo[2]:src_hi[2]]
+    mbox[dst_lo[0]:dst_hi[0], dst_lo[1]:dst_hi[1], dst_lo[2]:dst_hi[2]] = \
+        mask[src_lo[0]:src_hi[0], src_lo[1]:src_hi[1], src_lo[2]:src_hi[2]]
+    outside = 1.0 - mbox.sum() / max(1, mask.sum())
+    if outside > max_outside:
+        raise ValueError(f"{100 * outside:.1f}% of the brain falls outside the {crop_mm:g} mm box - "
+                         "increase --crop_mm")
+    f = target / side
+    return zoom(box, f, order=1), zoom(mbox.astype(np.uint8), f, order=0).astype(bool)
+
+
 def normalize(arr, mask, lo_p=0.5, hi_p=99.5):
     lo, hi = np.percentile(arr[mask], [lo_p, hi_p])
     out = np.clip((arr - lo) / (hi - lo + 1e-6), 0, 1)
@@ -241,12 +271,23 @@ def _out_path(row, a):
     return out + ".enc" if a.encrypt else out
 
 
-def process_one(row, a):
-    sitk.ProcessObject_SetGlobalDefaultNumberOfThreads(a.threads)
-    out, side = _out_path(row, a), _out_path(row, a) + ".json"
-    if a.resume and os.path.exists(out) and os.path.exists(side):  # done in an earlier session
-        meta = json.load(open(side))
-        return out, meta["tool"], meta["brain_ml"]
+def _stage1_path(row, a):
+    p = os.path.join(a.stage1_dir, f"{row['image_id']}.npy")
+    return p + ".enc" if a.encrypt else p
+
+
+def stage1(row, a):
+    """Steps 1-9 (read ... skull strip) -> (masked image, mask, tool, brain_ml), cached when --stage1_dir."""
+    cache = _stage1_path(row, a) if a.stage1_dir else None
+    if cache and os.path.exists(cache) and os.path.exists(cache + ".json"):
+        meta = json.load(open(cache + ".json"))
+        if abs(meta["spacing"] - a.spacing) < 1e-6:
+            if a.encrypt:
+                from secure_io import load_encrypted, load_key
+                both = load_encrypted(cache, load_key(a.key_file))
+            else:
+                both = np.load(cache)
+            return both[0].astype(np.float32), both[1] > 0.5, meta["tool"], meta["brain_ml"]
     img, m, tool, _ = prepare_and_mask(row, a)
     gap = mask_gap_mm(img, m)
     if gap is not None and gap > a.max_top_gap_mm:
@@ -257,7 +298,29 @@ def process_one(row, a):
     brain_ml = float(mask.sum() * np.prod(img.GetSpacing()) / 1000)
     if tool != "otsu":
         arr = arr * mask
-    arr, mask = crop_pad_resize(arr, mask, a.target)
+    if cache:
+        both = np.stack([arr, mask]).astype(np.float16)
+        if a.encrypt:
+            from secure_io import load_key, save_encrypted
+            save_encrypted(cache, both, load_key(a.key_file))
+        else:
+            np.save(cache, both)
+        json.dump({"tool": tool, "brain_ml": brain_ml, "spacing": a.spacing, "top_gap_mm": gap},
+                  open(cache + ".json", "w"))
+    return arr, mask, tool, brain_ml
+
+
+def process_one(row, a):
+    sitk.ProcessObject_SetGlobalDefaultNumberOfThreads(a.threads)
+    out, side = _out_path(row, a), _out_path(row, a) + ".json"
+    if a.resume and os.path.exists(out) and os.path.exists(side):  # done in an earlier session
+        meta = json.load(open(side))
+        return out, meta["tool"], meta["brain_ml"]
+    arr, mask, tool, brain_ml = stage1(row, a)
+    if a.crop == "fixed":
+        arr, mask = crop_fixed_resize(arr, mask, a.target, a.spacing, a.crop_mm)
+    else:
+        arr, mask = crop_pad_resize(arr, mask, a.target)
     vol = normalize(arr, mask).astype(np.float16)
 
     if a.encrypt:
@@ -267,7 +330,8 @@ def process_one(row, a):
         np.save(out, vol)
     if a.qc:
         save_qc(vol.astype(np.float32), os.path.join(a.out_dir, "qc", f"{row['image_id']}.png"))
-    json.dump({"tool": tool, "brain_ml": brain_ml}, open(side, "w"))
+    json.dump({"tool": tool, "brain_ml": brain_ml, "crop": a.crop,
+               "crop_mm": a.crop_mm if a.crop == "fixed" else None}, open(side, "w"))
     return out, tool, brain_ml
 
 
@@ -314,6 +378,12 @@ def main():
     ap.add_argument("--skullstrip", default="auto", choices=["auto", "synthstrip", "hdbet", "bet", "otsu", "premasked"],
                     help="premasked = input is already skull-stripped (e.g. OASIS T88 masked images)")
     ap.add_argument("--no_neck_crop", action="store_true")
+    ap.add_argument("--crop", default="brain", choices=["brain", "fixed"],
+                    help="brain = crop to each brain's own box (scale differs per brain); fixed = same "
+                         "mm box for every brain (keeps whole-brain atrophy visible)")
+    ap.add_argument("--crop_mm", type=float, default=192.0, help="box side in mm for --crop fixed")
+    ap.add_argument("--stage1_dir", default=None,
+                    help="cache skull-stripped images here so crop/size changes skip HD-BET")
     ap.add_argument("--bet_f", type=float, default=0.6, help="BET fractional threshold (higher = tighter mask)")
     ap.add_argument("--min_extent_mm", type=float, default=100.0, help="reject truncated series")
     ap.add_argument("--brain_ml_range", type=float, nargs=2, default=[900, 2000],
@@ -332,6 +402,8 @@ def main():
     assert a.target % 16 == 0, "--target must be divisible by 16"
     log = get_logger("preprocess", a.out_dir)
     os.makedirs(os.path.join(a.out_dir, "vols"), exist_ok=True)
+    if a.stage1_dir:
+        os.makedirs(a.stage1_dir, exist_ok=True)
     if a.qc:
         os.makedirs(os.path.join(a.out_dir, "qc"), exist_ok=True)
 

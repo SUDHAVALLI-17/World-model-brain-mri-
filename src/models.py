@@ -290,8 +290,11 @@ class WorldModelClassifier(nn.Module):
     """
 
     def __init__(self, wm: BrainWorldModel, n_classes=3, imagine_dts=(1.0, 2.0), dropout=0.3,
-                 freeze_dynamics=True, use_meta=True, meta_dropout=0.0):
+                 freeze_dynamics=True, use_meta=True, meta_dropout=0.0, n_extra=0):
         super().__init__()
+        # demo = [age, sex, *extra]: age/sex drive the dynamics; extra scalar features (e.g. brain
+        # volume / eTIV) go to the classification head only and are never hidden or attacked
+        self.n_extra = n_extra
         self.encoder, self.pool, self.dynamics = wm.encoder, wm.pool, wm.dynamics
         self.age_head = wm.age_head
         self.use_meta = use_meta          # False = image-only model (RQ-M3 baseline)
@@ -301,14 +304,14 @@ class WorldModelClassifier(nn.Module):
             for p in self.dynamics.parameters():
                 p.requires_grad = False
         E = wm.cfg["embed_dim"]
-        fdim = E * (1 + len(self.imagine_dts)) + 2
+        fdim = E * (1 + len(self.imagine_dts)) + 2 + n_extra
         self.head = nn.Sequential(nn.LayerNorm(fdim), nn.Dropout(dropout), nn.Linear(fdim, 256),
                                   nn.GELU(), nn.Dropout(dropout), nn.Linear(256, n_classes))
         self._fmap = None
 
     @property
     def feat_dim(self):
-        return self.head[0].normalized_shape[0] - 2
+        return self.head[0].normalized_shape[0] - 2 - self.n_extra
 
     @staticmethod
     def missing_meta(demo):
@@ -336,7 +339,7 @@ class WorldModelClassifier(nn.Module):
         if self.imagine_dts:
             g_now = BrainWorldModel.target_space(tok).mean(1)
             for dt in self.imagine_dts:
-                a = torch.cat([torch.full_like(demo[:, :1], dt / 2.0), demo], 1)
+                a = torch.cat([torch.full_like(demo[:, :1], dt / 2.0), demo[:, :2]], 1)
                 _, mu, _ = self.dynamics(tok, a, grid)
                 feats.append(mu - g_now)
         img_feats = torch.cat(feats, 1)  # image-derived features (what the debias adversary sees)

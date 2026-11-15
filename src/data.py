@@ -78,9 +78,13 @@ def _to_tensor(vol):
 class ScanDataset(Dataset):
     """One scan -> (volume, label, demographics). Used for classification."""
 
-    def __init__(self, df, aug=None, key=None):
+    def __init__(self, df, aug=None, key=None, label_map=None, extra=None):
+        """label_map: label string -> class index (default CN/MCI/AD = 0/1/2).
+        extra: optional (n_rows, k) array of extra head features, appended after [age, sex]."""
         self.df = df.reset_index(drop=True)
         self.aug, self.key = aug, key
+        self.label_map = label_map or LABEL2IDX
+        self.extra = None if extra is None or np.size(extra) == 0 else np.asarray(extra, np.float32)
 
     def __len__(self):
         return len(self.df)
@@ -92,7 +96,9 @@ class ScanDataset(Dataset):
         if self.aug:
             x = self.aug(x)
         demo = encode_action(0.0, r.get("age"), r.get("sex"))[1:]  # [age, sex]
-        return {"x": x, "y": LABEL2IDX[r.label], "demo": torch.from_numpy(demo), "idx": i,
+        if self.extra is not None:
+            demo = np.concatenate([demo, self.extra[i]])
+        return {"x": x, "y": self.label_map[r.label], "demo": torch.from_numpy(demo), "idx": i,
                 "bpf": torch.tensor(brain_parenchymal_fraction(vol)),
                 "age_known": torch.tensor(_age_known(r))}
 

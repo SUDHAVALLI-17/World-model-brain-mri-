@@ -296,7 +296,10 @@ def main():
         if not paths:
             log.warning("no checkpoints for %s", name)
             continue
-        ens = Ensemble([load_classifier(p, dev) for p in paths]).to(dev).eval()
+        mods = [load_classifier(p, dev) for p in paths]
+        if any(m.task != "3class" or m.extra_feats for m in mods):
+            raise SystemExit(f"{name}: Paper 1 evaluation expects 3-class models without --extra_feats")
+        ens = Ensemble(mods).to(dev).eval()
         df, budget = classification_section(name, ens, ds, dev, a, log)
         tables.append(df)
         report.setdefault("RQ-M1_minimal_flip_budget", {})[name] = budget

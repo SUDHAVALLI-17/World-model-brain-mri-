@@ -16,17 +16,25 @@ import torch.nn.functional as F
 from sklearn.metrics import balanced_accuracy_score, confusion_matrix
 from torch.utils.data import DataLoader
 
-from common import LABEL2IDX, LABELS, get_device, get_logger, load_volume
+from common import TASKS, add_extra_columns, extra_matrix, get_device, get_logger, load_volume, task_frame
 from data import ScanDataset, load_split
 from finetune_classify import metrics, predict
 from models import BrainWorldModel, WorldModelClassifier
 
 
+def ckpt_task(ck):
+    """Task info stored in a classifier checkpoint (older checkpoints = 3-class, no extra inputs)."""
+    task = ck.get("task", "3class")
+    return task, ck.get("classes", TASKS[task]["classes"]), ck.get("extra_feats", []), ck.get("extra_stats", {})
+
+
 def load_classifier(path, dev):
     ck = torch.load(path, map_location="cpu", weights_only=False)
-    m = WorldModelClassifier(BrainWorldModel(**ck["cfg"]), len(LABELS), ck["imagine"])
+    task, classes, feats, _ = ckpt_task(ck)
+    m = WorldModelClassifier(BrainWorldModel(**ck["cfg"]), len(classes), ck["imagine"], n_extra=len(feats))
     m.load_state_dict(ck["state"], strict=False)
     m.use_meta = ck.get("use_meta", True)
+    m.task, m.classes, m.extra_feats, m.extra_stats = task, classes, feats, ck.get("extra_stats", {})
     return m.to(dev).eval()
 
 
@@ -94,20 +102,28 @@ def main():
     te = load_split(a.index, json.load(open(a.splits)), part="test")
     paths = sorted(glob.glob(a.ckpts))
     assert paths, f"no checkpoints match {a.ckpts}"
-    log.info("test: %d scans / %d subjects | ensemble of %d fold models", len(te),
-             te.subject.nunique(), len(paths))
-    dl = DataLoader(ScanDataset(te, None, key), 4)
     models = [load_classifier(p, dev) for p in paths]
-    probs = np.mean([predict(m, dl, dev) for m in models], 0)
-    y = te.label.map(LABEL2IDX).values
+    task, LABELS = models[0].task, models[0].classes
+    if any(m.task != task or m.extra_feats != models[0].extra_feats for m in models):
+        raise SystemExit("all checkpoints in the ensemble must share the same --task and --extra_feats")
+    te, y = task_frame(add_extra_columns(te), task)
+    log.info("test (%s %s): %d scans / %d subjects | ensemble of %d fold models", task, LABELS, len(te),
+             te.subject.nunique(), len(paths))
+    probs = []
+    for m in models:  # each fold model z-scores the extra inputs with its own training statistics
+        ds = ScanDataset(te, None, key, TASKS[task]["map"], extra_matrix(te, m.extra_feats, m.extra_stats))
+        probs.append(predict(m, DataLoader(ds, 4), dev))
+    probs = np.mean(probs, 0)
     pred = probs.argmax(1)
+    dl = DataLoader(ScanDataset(te, None, key, TASKS[task]["map"],
+                                extra_matrix(te, models[0].extra_feats, models[0].extra_stats)), 4)
 
-    rep = {"scan_level": metrics(y, probs), "n_scans": len(te), "n_subjects": int(te.subject.nunique()),
+    rep = {"task": task, "classes": LABELS, "scan_level": metrics(y, probs), "n_scans": len(te), "n_subjects": int(te.subject.nunique()),
            "bal_acc_95ci_subject_bootstrap": subject_bootstrap(te, y, pred)}
     if te.groupby("subject").label.nunique().max() == 1:  # labels constant per subject
         sub = te.assign(**{f"p{i}": probs[:, i] for i in range(len(LABELS))}).groupby("subject")
         sp = sub[[f"p{i}" for i in range(len(LABELS))]].mean().values
-        sy = sub.label.first().map(LABEL2IDX).values
+        sy = sub.label.first().map(TASKS[task]["map"]).values
         rep["subject_level"] = metrics(sy, sp)
     cm = confusion_matrix(y, pred, labels=range(len(LABELS)))
     rep["confusion_matrix(rows=true)"] = {LABELS[i]: cm[i].tolist() for i in range(len(LABELS))}
@@ -127,7 +143,7 @@ def main():
             g0 = BrainWorldModel.target_space(tok).mean(1)
             row = []
             for yr in (1.0, 2.0, 3.0):
-                act = torch.cat([torch.full_like(d[:, :1], yr / 2.0), d], 1)
+                act = torch.cat([torch.full_like(d[:, :1], yr / 2.0), d[:, :2]], 1)
                 _, mu, logvar = m0.dynamics(tok, act, grid)
                 row.append(torch.stack([(mu - g0).norm(dim=1), logvar.exp().mean(1)], 1))
             drift.append(torch.cat(row, 1).cpu())
@@ -148,7 +164,7 @@ def main():
             log.warning("matplotlib not installed - skipping Grad-CAM pngs")
             return
         os.makedirs(os.path.join(a.out, "gradcam"), exist_ok=True)
-        ds = ScanDataset(te, None, key)
+        ds = dl.dataset
         for c, lab in enumerate(LABELS):
             for i in np.where(y == c)[0][: a.gradcam]:
                 s = ds[i]

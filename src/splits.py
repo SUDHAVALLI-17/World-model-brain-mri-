@@ -23,6 +23,10 @@ def main():
     ap.add_argument("--test_frac", type=float, default=0.2)
     ap.add_argument("--folds", type=int, default=5)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--stratify", default="baseline", choices=["baseline", "worst"],
+                    help="label used to balance subjects across folds: their first visit (default, keeps "
+                         "existing splits) or their most severe visit (spreads people who reach AD only at "
+                         "follow-up evenly across folds)")
     ap.add_argument("--smoke", action="store_true",
                     help="pipeline test on tiny data: every subject in train, val AND test (results invalid)")
     a = ap.parse_args()
@@ -36,8 +40,12 @@ def main():
         log.warning("SMOKE SPLIT: %d subjects used for train, val and test - for checking that the "
                     "code runs only; any accuracy reported from this split is meaningless", len(subs))
         return
-    # stratify on each subject's baseline label
+    # stratify on each subject's baseline (or most severe) label
     first = df.sort_values("acq_date").groupby("subject").first().reset_index()
+    if a.stratify == "worst":
+        sev = {"CN": 0, "MCI": 1, "AD": 2}
+        worst = df.assign(_s=df.label.map(sev)).groupby("subject")._s.max().map({v: k for k, v in sev.items()})
+        first["label"] = first.subject.map(worst)
     if first.subject.nunique() < 10 or first.label.value_counts().min() < 2:
         raise SystemExit(f"only {first.subject.nunique()} subjects / class counts "
                          f"{first.label.value_counts().to_dict()}: too few for a real split. "

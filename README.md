@@ -73,6 +73,32 @@ the current latent state *plus imagined future states* to predict CN, MCI or AD.
         test metrics + bootstrap CI · fold ensemble · 3D Grad-CAM · latent drift & uncertainty
 ```
 
+## Diagnosing weak classification (controlled evaluation)
+
+When the pipeline runs but CN/MCI/AD predictions are unreliable, do this **before** more preprocessing or
+defended training. It reuses the existing `splits.json` and checkpoints. Keep the current splits:
+re-splitting changes the held-out test subjects, which the world model was pretrained without.
+
+1. **Label audit + non-imaging baselines** (minutes, CPU):
+   `python src/diagnose_labels.py --index data/proc/index_proc.csv --splits data/splits.json --out runs/diagnose`
+   - CDR -> label counts, OASIS `Group` vs our label, label paths per subject, missing values
+   - scans **and distinct subjects** per class in every fold (7 AD scans can be 2 people)
+   - logistic regression on the same folds: age + sex only (confound), OASIS nWBV, our mask volume / eTIV
+2. **Controlled cross-validation**: `TASK=cdr_binary SEEDS="42 43 44" bash run_cv.sh`
+   - same folds and settings, several seeds, one change at a time:
+     `scratch`, `wm_ft`, `wm_probe` (frozen encoder), `wm_ft_vol` (+ brain volume / eTIV input)
+   - image-only, no label smoothing, no flip averaging, fixed epochs, checkpoint = lowest class-balanced val loss
+   - `src/cv_report.py` pools out-of-fold predictions, averages seeds, gives subject-bootstrap 95% CIs and a
+     paired AUC difference against `scratch` (the test of whether the world model helps)
+3. **Optional fixed-size crop**: the default crop scales every brain to fill the cube, which removes
+   whole-brain atrophy. `preprocess.py --crop fixed --crop_mm 192 --stage1_dir data/stage1 --out_dir data/proc_fixed`
+   keeps every brain at the same mm scale; `--stage1_dir` caches the skull-stripped images so later crop
+   changes skip HD-BET. Compare with `INDEX_FIXED=data/proc_fixed/index_proc.csv FIXED_EXPS=scratch_fixed bash run_cv.sh`.
+
+Tasks (`--task` in `finetune_classify.py`): `3class` (CDR 0 / 0.5 / >=1), `cdr_binary` (CDR 0 vs >=0.5,
+the standard OASIS task), `cn_vs_ad` (CDR 0 vs >=1). On OASIS, "MCI" = CDR 0.5, which OASIS calls very mild
+dementia, so MCI vs AD is a severity split; report results under the CDR names.
+
 ## Why this design for a *subset*
 
 | Problem with small ADNI subsets | What the pipeline does |
@@ -102,7 +128,10 @@ in `common.py` and `action_dim`.
 | `src/data.py` | Datasets (single scans, longitudinal transitions) + 3D augmentation |
 | `src/models.py` | Encoder, JEPA predictor, action dynamics, world model, classifier |
 | `src/pretrain_world_model.py` | Stage A |
-| `src/finetune_classify.py` | Stage B (one fold per run) |
+| `src/finetune_classify.py` | Stage B (one fold per run); `--task`, `--extra_feats`, `--linear_probe`, `--no_aug` |
+| `src/diagnose_labels.py` | Label audit + non-imaging baselines (nWBV, volume / eTIV, age + sex) on the CV folds |
+| `src/cv_report.py` | Pools CV predictions over folds and seeds: subject-bootstrap CIs, paired comparison |
+| `run_cv.sh` | Controlled evaluation: experiments x seeds x folds, then one report |
 | `src/evaluate.py` | Test set: ensemble, metrics, CI, Grad-CAM, imagined latent drift |
 | `src/adversarial.py` | FGSM / PGD / TRADES attacks, eps schedule, gradient-reversal debiasing adversary |
 | `src/trajectory_attacks.py` | Paper 1: attacks on the forecast (pixel hijack, fake/hide decline, Δt and age action attacks) |

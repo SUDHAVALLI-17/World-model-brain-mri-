@@ -137,6 +137,9 @@ class Engine:
         self.target = int(self.manifest.get("target", 96))
         self.classifiers = [load_classifier(os.path.join(model_dir, p), self.dev)
                             for p in self.manifest["classifiers"]]
+        if any(m.task != "3class" or m.extra_feats for m in self.classifiers):
+            raise RuntimeError("the web app serves 3-class image(+age/sex) models; package a model trained "
+                               "with --task 3class and no --extra_feats")
         ck = torch.load(os.path.join(model_dir, self.manifest["world_model"]), map_location="cpu", weights_only=False)
         self.wm = BrainWorldModel(**ck["cfg"])
         self.wm.load_state_dict(ck["model"], strict=False)
