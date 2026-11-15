@@ -21,6 +21,8 @@
 #   wm_ft          world-model encoder, fine-tuned                 -> does pretraining help?
 #   wm_probe       world-model encoder frozen, only the head trains -> is the representation useful?
 #   wm_ft_vol      wm_ft + brain volume / eTIV as an extra input   -> does whole-brain volume help?
+#   scratch_mmbn   scratch with [mean, max] pooling + BatchNorm head -> fixes feature collapse?
+#   wm_ft_mmbn     wm_ft   with [mean, max] pooling + BatchNorm head
 #   *_fixed        same, on fixed-mm-crop volumes (needs INDEX_FIXED); wm_ft_fixed reuses a world model
 #                  pretrained on brain-cropped volumes unless PRETRAINED points at one pretrained on them
 # Note: the world model is pretrained on all dev subjects' images (no labels), including each
@@ -60,6 +62,8 @@ exp_args() {  # exp_args <exp> -> index + model flags
     wm_ft)         echo "--index $INDEX --pretrained $PRETRAINED" ;;
     wm_probe)      echo "--index $INDEX --pretrained $PRETRAINED --linear_probe" ;;
     wm_ft_vol)     echo "--index $INDEX --pretrained $PRETRAINED --extra_feats vol_ratio" ;;
+    scratch_mmbn)  echo "--index $INDEX --pool meanmax --head_norm batch" ;;
+    wm_ft_mmbn)    echo "--index $INDEX --pretrained $PRETRAINED --pool meanmax --head_norm batch" ;;
     scratch_fixed) echo "--index ${INDEX_FIXED:?set INDEX_FIXED} " ;;
     wm_ft_fixed)   echo "--index ${INDEX_FIXED:?set INDEX_FIXED} --pretrained $PRETRAINED" ;;
     *) echo "unknown experiment $1" >&2; exit 1 ;;

@@ -31,7 +31,8 @@ def ckpt_task(ck):
 def load_classifier(path, dev):
     ck = torch.load(path, map_location="cpu", weights_only=False)
     task, classes, feats, _ = ckpt_task(ck)
-    m = WorldModelClassifier(BrainWorldModel(**ck["cfg"]), len(classes), ck["imagine"], n_extra=len(feats))
+    m = WorldModelClassifier(BrainWorldModel(**ck["cfg"]), len(classes), ck["imagine"], n_extra=len(feats),
+                             pool_mode=ck.get("pool_mode", "attn"), head_norm=ck.get("head_norm", "layer"))
     m.load_state_dict(ck["state"], strict=False)
     m.use_meta = ck.get("use_meta", True)
     m.task, m.classes, m.extra_feats, m.extra_stats = task, classes, feats, ck.get("extra_stats", {})

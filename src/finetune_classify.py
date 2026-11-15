@@ -40,7 +40,8 @@ from data import Augment3D, ScanDataset, load_split
 from models import BrainWorldModel, WorldModelClassifier, cosine_lr
 
 
-def build_model(ckpt_path, imagine, dev, cfg=None, n_classes=len(LABELS), n_extra=0):
+def build_model(ckpt_path, imagine, dev, cfg=None, n_classes=len(LABELS), n_extra=0, pool_mode="attn",
+                head_norm="layer"):
     if ckpt_path:
         ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         wm = BrainWorldModel(**ck["cfg"])
@@ -48,7 +49,8 @@ def build_model(ckpt_path, imagine, dev, cfg=None, n_classes=len(LABELS), n_extr
             wm.load_state_dict(ck["model"])
     else:
         wm = BrainWorldModel(**(cfg or {}))
-    return WorldModelClassifier(wm, n_classes, imagine, n_extra=n_extra).to(dev), wm.cfg
+    return WorldModelClassifier(wm, n_classes, imagine, n_extra=n_extra, pool_mode=pool_mode,
+                                head_norm=head_norm).to(dev), wm.cfg
 
 
 @torch.no_grad()
@@ -107,6 +109,11 @@ def main():
                     help="keep the pretrained encoder frozen for all epochs (tests the representation)")
     ap.add_argument("--no_aug", action="store_true", help="no training augmentation")
     ap.add_argument("--no_tta", action="store_true", help="no left-right flip averaging at validation")
+    ap.add_argument("--pool", default="attn", choices=["attn", "mean", "meanmax"],
+                    help="token pooling: attn (default), mean, or meanmax = [mean, max] of tokens")
+    ap.add_argument("--head_norm", default="layer", choices=["layer", "batch"],
+                    help="first head layer: layer = LayerNorm (default), batch = BatchNorm1d (per-feature "
+                         "standardisation across scans; check feature collapse with feature_spread.py)")
     ap.add_argument("--pretrained", default=None, help="world-model checkpoint (omit = from scratch)")
     ap.add_argument("--out", default="runs/cls/fold0")
     ap.add_argument("--epochs", type=int, default=60)
@@ -178,7 +185,8 @@ def main():
                        drop_last=len(ds_tr) > a.bs)
     dl_va = DataLoader(ScanDataset(va, None, key, lmap, x_va), a.bs, num_workers=a.workers)
 
-    model, wm_cfg = build_model(a.pretrained, a.imagine, dev, n_classes=n_cls, n_extra=len(a.extra_feats))
+    model, wm_cfg = build_model(a.pretrained, a.imagine, dev, n_classes=n_cls, n_extra=len(a.extra_feats),
+                                pool_mode=a.pool, head_norm=a.head_norm)
     model.use_meta, model.meta_dropout = not a.no_meta, a.meta_dropout
     groups = model.param_groups(a.lr, a.enc_lr_mult, a.wd)
 
@@ -268,6 +276,7 @@ def main():
                         "debias": a.debias, "use_meta": not a.no_meta, "meta_dropout": a.meta_dropout,
                         "meta_adv": a.meta_adv, "joint": joint, "task": a.task, "classes": classes,
                         "extra_feats": a.extra_feats, "extra_stats": x_stats, "seed": a.seed,
+                        "pool_mode": a.pool, "head_norm": a.head_norm,
                         "fold": a.fold, "select": select}, os.path.join(a.out, "best.pt"))
             out = va[["image_id", "subject", "label"]].copy()
             out["y"] = y_va

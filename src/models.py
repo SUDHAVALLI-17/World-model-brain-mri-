@@ -290,8 +290,22 @@ class WorldModelClassifier(nn.Module):
     """
 
     def __init__(self, wm: BrainWorldModel, n_classes=3, imagine_dts=(1.0, 2.0), dropout=0.3,
-                 freeze_dynamics=True, use_meta=True, meta_dropout=0.0, n_extra=0):
+                 freeze_dynamics=True, use_meta=True, meta_dropout=0.0, n_extra=0,
+                 pool_mode="attn", head_norm="layer"):
+        """pool_mode: how the 216 latent tokens become one image vector
+             attn    = the world model's attention pool (default; its query starts at zero, so an
+                       untrained pool is a plain average and local atrophy is diluted)
+             mean    = average of tokens
+             meanmax = [average, max] of tokens (max keeps strong local responses, e.g. ventricles)
+           head_norm: first layer of the head
+             layer   = LayerNorm (default; normalises each scan on its own, so a component shared by
+                       every scan passes through and can swamp the differences between scans)
+             batch   = BatchNorm1d (standardises each feature across scans: subtracts what all scans
+                       share, so the head sees the differences)"""
         super().__init__()
+        if pool_mode not in ("attn", "mean", "meanmax") or head_norm not in ("layer", "batch"):
+            raise ValueError(f"pool_mode={pool_mode!r} head_norm={head_norm!r}")
+        self.pool_mode, self.head_norm = pool_mode, head_norm
         # demo = [age, sex, *extra]: age/sex drive the dynamics; extra scalar features (e.g. brain
         # volume / eTIV) go to the classification head only and are never hidden or attacked
         self.n_extra = n_extra
@@ -304,14 +318,24 @@ class WorldModelClassifier(nn.Module):
             for p in self.dynamics.parameters():
                 p.requires_grad = False
         E = wm.cfg["embed_dim"]
-        fdim = E * (1 + len(self.imagine_dts)) + 2 + n_extra
-        self.head = nn.Sequential(nn.LayerNorm(fdim), nn.Dropout(dropout), nn.Linear(fdim, 256),
+        self._img_dim = E * (2 if pool_mode == "meanmax" else 1) + E * len(self.imagine_dts)
+        fdim = self._img_dim + 2 + n_extra
+        norm = nn.LayerNorm(fdim) if head_norm == "layer" else nn.BatchNorm1d(fdim)
+        self.head = nn.Sequential(norm, nn.Dropout(dropout), nn.Linear(fdim, 256),
                                   nn.GELU(), nn.Dropout(dropout), nn.Linear(256, n_classes))
         self._fmap = None
 
     @property
     def feat_dim(self):
-        return self.head[0].normalized_shape[0] - 2 - self.n_extra
+        return self._img_dim
+
+    def pool_tokens(self, tok):
+        """(B, N, E) tokens -> (B, E) or (B, 2E) image vector, per pool_mode."""
+        if self.pool_mode == "mean":
+            return tok.mean(1)
+        if self.pool_mode == "meanmax":
+            return torch.cat([tok.mean(1), tok.amax(1)], 1)
+        return self.pool(tok)
 
     @staticmethod
     def missing_meta(demo):
@@ -335,7 +359,7 @@ class WorldModelClassifier(nn.Module):
             fmap.retain_grad()
         self._fmap = fmap  # kept for Grad-CAM
         tok, grid = BrainWorldModel.to_tokens(fmap)
-        feats = [self.pool(tok)]
+        feats = [self.pool_tokens(tok)]
         if self.imagine_dts:
             g_now = BrainWorldModel.target_space(tok).mean(1)
             for dt in self.imagine_dts:
