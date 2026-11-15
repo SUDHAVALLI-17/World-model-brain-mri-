@@ -84,7 +84,12 @@ re-splitting changes the held-out test subjects, which the world model was pretr
    - CDR -> label counts, OASIS `Group` vs our label, label paths per subject, missing values
    - scans **and distinct subjects** per class in every fold (7 AD scans can be 2 people)
    - logistic regression on the same folds: age + sex only (confound), OASIS nWBV, our mask volume / eTIV
-2. **Controlled cross-validation**: `TASK=cdr_binary SEEDS="42 43 44" bash run_cv.sh`
+2. **Is the preprocessing good?** `python src/check_preprocessed.py --index data/proc/index_proc.csv --splits data/splits.json --key_file <key>`
+   checks the final cubes without a neural network: NaN / range / size / position, flipped cubes (each cube vs
+   the average brain and its flips), pictures (random cubes, outliers, mean CN vs mean AD and their
+   difference), and a voxel and atrophy-measure classifier on the same subject-level folds. If that simple
+   classifier separates the classes and the CNN does not, preprocessing is not the problem.
+3. **Controlled cross-validation**: `TASK=cdr_binary SEEDS="42 43 44" bash run_cv.sh`
    - first two sanity checks on fold 0 (`sanity/sanity.md`): memorise 64 scans (`--overfit 64`, must reach
      about 1.0, otherwise the model cannot fit and tuning will not help) and train on shuffled labels
      (`--shuffle_labels`, must be at or below chance, otherwise the label leaks in another way)
@@ -95,13 +100,13 @@ re-splitting changes the held-out test subjects, which the world model was pretr
    - image-only, no label smoothing, no flip averaging, fixed epochs, checkpoint = lowest class-balanced val loss
    - `src/cv_report.py` pools out-of-fold predictions, averages seeds, gives subject-bootstrap 95% CIs and a
      paired AUC difference against `scratch` (the test of whether the world model helps)
-3. **Feature-collapse check** (if a model predicts nearly the same probabilities for every scan):
+4. **Feature-collapse check** (if a model predicts nearly the same probabilities for every scan):
    `python src/feature_spread.py --index data/proc/index_proc.csv --splits data/splits.json --fold 0 --key_file <key> --ckpt name=path ...`
    measures, on the same training scans, how much the image vector differs between scans for a random
    encoder and each checkpoint, under attention / mean / max / [mean, max] pooling and with no pooling.
    If the tokens differ but the attention-pooled vector does not, train with
    `--pool meanmax --head_norm batch` (experiments `scratch_mmbn`, `wm_ft_mmbn` in `run_cv.sh`).
-4. **Optional fixed-size crop**: the default crop scales every brain to fill the cube, which removes
+5. **Optional fixed-size crop**: the default crop scales every brain to fill the cube, which removes
    whole-brain atrophy. `preprocess.py --crop fixed --crop_mm 192 --stage1_dir data/stage1 --out_dir data/proc_fixed`
    keeps every brain at the same mm scale; `--stage1_dir` caches the skull-stripped images so later crop
    changes skip HD-BET. Compare with `INDEX_FIXED=data/proc_fixed/index_proc.csv FIXED_EXPS=scratch_fixed bash run_cv.sh`.
@@ -142,6 +147,7 @@ in `common.py` and `action_dim`.
 | `src/finetune_classify.py` | Stage B (one fold per run); `--task`, `--extra_feats`, `--linear_probe`, `--no_aug`, `--pool`, `--head_norm`, `--overfit`, `--shuffle_labels` |
 | `src/diagnose_labels.py` | Label audit + non-imaging baselines (nWBV, volume / eTIV, age + sex) on the CV folds |
 | `src/feature_spread.py` | Feature-collapse check: spread of image features across scans per encoder and pooling, plus a linear probe |
+| `src/check_preprocessed.py` | Is the preprocessing good? Technical checks, flipped-cube detection, pictures, and a voxel classifier on the final cubes |
 | `src/sanity_report.py` | Verdicts for the memorisation and shuffled-label checks |
 | `src/cv_report.py` | Pools CV predictions over folds and seeds: subject-bootstrap CIs, paired comparison |
 | `run_cv.sh` | Controlled evaluation: experiments x seeds x folds, then one report |
