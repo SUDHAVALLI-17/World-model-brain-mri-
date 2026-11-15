@@ -85,8 +85,13 @@ re-splitting changes the held-out test subjects, which the world model was pretr
    - scans **and distinct subjects** per class in every fold (7 AD scans can be 2 people)
    - logistic regression on the same folds: age + sex only (confound), OASIS nWBV, our mask volume / eTIV
 2. **Controlled cross-validation**: `TASK=cdr_binary SEEDS="42 43 44" bash run_cv.sh`
+   - first two sanity checks on fold 0 (`sanity/sanity.md`): memorise 64 scans (`--overfit 64`, must reach
+     about 1.0, otherwise the model cannot fit and tuning will not help) and train on shuffled labels
+     (`--shuffle_labels`, must be at or below chance, otherwise the label leaks in another way)
    - same folds and settings, several seeds, one change at a time:
-     `scratch`, `wm_ft`, `wm_probe` (frozen encoder), `wm_ft_vol` (+ brain volume / eTIV input)
+     `scratch`, `wm_ft`, `wm_probe` (frozen encoder), `wm_ft_vol` (+ brain volume / eTIV input),
+     `scratch_noimag` (no imagined-future inputs, which in a scratch model come from a random frozen
+     network), `scratch_mmbn_noimag` and `wm_ft_mmbn` ([mean, max] pooling + BatchNorm head)
    - image-only, no label smoothing, no flip averaging, fixed epochs, checkpoint = lowest class-balanced val loss
    - `src/cv_report.py` pools out-of-fold predictions, averages seeds, gives subject-bootstrap 95% CIs and a
      paired AUC difference against `scratch` (the test of whether the world model helps)
@@ -134,9 +139,10 @@ in `common.py` and `action_dim`.
 | `src/data.py` | Datasets (single scans, longitudinal transitions) + 3D augmentation |
 | `src/models.py` | Encoder, JEPA predictor, action dynamics, world model, classifier |
 | `src/pretrain_world_model.py` | Stage A |
-| `src/finetune_classify.py` | Stage B (one fold per run); `--task`, `--extra_feats`, `--linear_probe`, `--no_aug`, `--pool`, `--head_norm` |
+| `src/finetune_classify.py` | Stage B (one fold per run); `--task`, `--extra_feats`, `--linear_probe`, `--no_aug`, `--pool`, `--head_norm`, `--overfit`, `--shuffle_labels` |
 | `src/diagnose_labels.py` | Label audit + non-imaging baselines (nWBV, volume / eTIV, age + sex) on the CV folds |
 | `src/feature_spread.py` | Feature-collapse check: spread of image features across scans per encoder and pooling, plus a linear probe |
+| `src/sanity_report.py` | Verdicts for the memorisation and shuffled-label checks |
 | `src/cv_report.py` | Pools CV predictions over folds and seeds: subject-bootstrap CIs, paired comparison |
 | `run_cv.sh` | Controlled evaluation: experiments x seeds x folds, then one report |
 | `src/evaluate.py` | Test set: ensemble, metrics, CI, Grad-CAM, imagined latent drift |

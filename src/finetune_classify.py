@@ -109,6 +109,13 @@ def main():
                     help="keep the pretrained encoder frozen for all epochs (tests the representation)")
     ap.add_argument("--no_aug", action="store_true", help="no training augmentation")
     ap.add_argument("--no_tta", action="store_true", help="no left-right flip averaging at validation")
+    ap.add_argument("--shuffle_labels", action="store_true",
+                    help="sanity check: randomly permute the TRAINING labels (validation stays real). A sound "
+                         "pipeline then scores at chance (AUC ~0.5); much better = leakage or a label bug")
+    ap.add_argument("--overfit", type=int, default=0, metavar="N",
+                    help="sanity check: train on N class-balanced training scans and validate on the SAME "
+                         "scans, no augmentation. A model that can learn should reach ~100%%; if it cannot, "
+                         "the problem is the model or the optimisation, not generalisation")
     ap.add_argument("--pool", default="attn", choices=["attn", "mean", "meanmax"],
                     help="token pooling: attn (default), mean, or meanmax = [mean, max] of tokens")
     ap.add_argument("--head_norm", default="layer", choices=["layer", "batch"],
@@ -165,6 +172,26 @@ def main():
     classes, lmap, n_cls = spec["classes"], spec["map"], len(spec["classes"])
     tr, y_tr = task_frame(add_extra_columns(load_split(a.index, splits, a.fold, "train")), a.task)
     va, y_va = task_frame(add_extra_columns(load_split(a.index, splits, a.fold, "val")), a.task)
+    if a.overfit:
+        rng = np.random.default_rng(a.seed)
+        per = int(np.ceil(a.overfit / n_cls))
+        keep = np.concatenate([rng.permutation(np.where(y_tr == c)[0])[:per] for c in range(n_cls)])
+        tr = tr.iloc[np.sort(keep)].reset_index(drop=True)
+        y_tr = tr.label.map(lmap).values.astype(int)
+        va, y_va = tr.copy(), y_tr.copy()
+        a.no_aug, a.patience = True, 10 ** 6
+        log.warning("OVERFIT TEST: %d training scans, validated on the same scans (not a result)", len(tr))
+    shuffle_agreement = None
+    if a.shuffle_labels:
+        rng = np.random.default_rng(a.seed + 1000)
+        tr = tr.copy()
+        y_true = y_tr.copy()
+        tr["label"] = tr.label.values[rng.permutation(len(tr))]
+        y_tr = tr.label.map(lmap).values.astype(int)
+        shuffle_agreement = float(balanced_accuracy_score(y_true, y_tr))
+        log.warning("SHUFFLED-LABEL TEST: training labels permuted (agreement with the true labels: "
+                    "balanced accuracy %.3f, chance %.3f); validation labels are real",
+                    shuffle_agreement, 1 / n_cls)
     log.info("task %s %s | fold %d | train %d scans / %d subjects %s | val %d scans / %d subjects %s",
              a.task, classes, a.fold, len(tr), tr.subject.nunique(), tr.label.value_counts().to_dict(),
              len(va), va.subject.nunique(), va.label.value_counts().to_dict())
@@ -211,7 +238,7 @@ def main():
     log.info("adv=%s eps=%.4f steps=%d | debias=%s | select=%s | meta: use=%s dropout=%.2f adv=%.1fy | joint=%s",
              a.adv, a.eps, a.pgd_steps, a.debias, select, not a.no_meta, a.meta_dropout, a.meta_adv, joint)
     total, step = a.epochs * len(dl_tr), 0
-    best, best_ep = -np.inf, 0
+    best, best_ep, best_m = -np.inf, 0, {}
     adv_start = a.freeze_epochs if a.pretrained else 0
 
     for ep in range(a.epochs):
@@ -269,8 +296,9 @@ def main():
             extra += f" | {a.debias}-adv loss {tot_adv / len(dl_tr):.3f} acc {np.mean(adv_acc):.2f}"
         log.info("ep %3d%s | loss %.4f%s | %s", ep + 1, " (enc frozen)" if frozen else "",
                  tot / max(1, len(dl_tr)), extra, " ".join(f"{k}={v:.3f}" for k, v in m.items()))
+        last_m = m
         if score > best:
-            best, best_ep = score, ep + 1
+            best, best_ep, best_m = score, ep + 1, m
             torch.save({"state": model.state_dict(), "cfg": wm_cfg, "imagine": a.imagine,
                         "val_metrics": m, "epoch": ep + 1, "adv": a.adv, "eps": a.eps,
                         "debias": a.debias, "use_meta": not a.no_meta, "meta_dropout": a.meta_dropout,
@@ -287,7 +315,10 @@ def main():
             log.info("early stop (no val improvement for %d epochs)", a.patience)
             break
     log.info("best epoch %d -> %s", best_ep, os.path.join(a.out, "best.pt"))
-    json.dump({"task": a.task, "classes": classes, "best_epoch": best_ep, "args": vars(a)},
+    json.dump({"task": a.task, "classes": classes, "best_epoch": best_ep, "best_metrics": best_m,
+               "last_metrics": last_m, "sanity": "overfit" if a.overfit else
+               ("shuffled_labels" if a.shuffle_labels else None), "shuffle_agreement": shuffle_agreement,
+               "n_classes": n_cls, "args": vars(a)},
               open(os.path.join(a.out, "run_info.json"), "w"), indent=1)
 
 

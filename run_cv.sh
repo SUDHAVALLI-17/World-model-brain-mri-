@@ -14,6 +14,10 @@
 #   INDEX_FIXED=      index_proc.csv of a --crop fixed preprocessing run; adds FIXED_EXPS
 #   FIXED_EXPS="scratch_fixed wm_ft_fixed"   experiments run on INDEX_FIXED
 #   AUG=0             0 = no augmentation, 1 = augmentation on (compare by running both into new RUNS_CV)
+#   SANITY=1          run the sanity checks first (fold 0, first seed): memorise OVERFIT_N scans,
+#                     and train on shuffled labels; summary in $RUNS_CV/$TASK/sanity/sanity.md
+#   SANITY_EXPS="scratch_noimag scratch_mmbn_noimag wm_ft_mmbn"   configurations the checks use
+#   OVERFIT_N=64 OVERFIT_EP=60
 #   DATA=data RUNS=runs KEY=~/.wm_data.key RUNS_CV=$RUNS/cv
 #
 # Experiments (all: image-only, no label smoothing, no flip averaging, select by val loss):
@@ -23,6 +27,9 @@
 #   wm_ft_vol      wm_ft + brain volume / eTIV as an extra input   -> does whole-brain volume help?
 #   scratch_mmbn   scratch with [mean, max] pooling + BatchNorm head -> fixes feature collapse?
 #   wm_ft_mmbn     wm_ft   with [mean, max] pooling + BatchNorm head
+#   scratch_noimag       scratch without imagined-future features (in scratch they come from a
+#                        random, frozen dynamics network, i.e. 512 noise inputs)
+#   scratch_mmbn_noimag  scratch_noimag with [mean, max] pooling + BatchNorm head
 #   *_fixed        same, on fixed-mm-crop volumes (needs INDEX_FIXED); wm_ft_fixed reuses a world model
 #                  pretrained on brain-cropped volumes unless PRETRAINED points at one pretrained on them
 # Note: the world model is pretrained on all dev subjects' images (no labels), including each
@@ -64,6 +71,8 @@ exp_args() {  # exp_args <exp> -> index + model flags
     wm_ft_vol)     echo "--index $INDEX --pretrained $PRETRAINED --extra_feats vol_ratio" ;;
     scratch_mmbn)  echo "--index $INDEX --pool meanmax --head_norm batch" ;;
     wm_ft_mmbn)    echo "--index $INDEX --pretrained $PRETRAINED --pool meanmax --head_norm batch" ;;
+    scratch_noimag)      echo "--index $INDEX --imagine" ;;
+    scratch_mmbn_noimag) echo "--index $INDEX --pool meanmax --head_norm batch --imagine" ;;
     scratch_fixed) echo "--index ${INDEX_FIXED:?set INDEX_FIXED} " ;;
     wm_ft_fixed)   echo "--index ${INDEX_FIXED:?set INDEX_FIXED} --pretrained $PRETRAINED" ;;
     *) echo "unknown experiment $1" >&2; exit 1 ;;
@@ -71,6 +80,24 @@ exp_args() {  # exp_args <exp> -> index + model flags
 }
 FIXED_EXPS=${FIXED_EXPS:-"scratch_fixed wm_ft_fixed"}
 [ -n "$INDEX_FIXED" ] && EXPS="$EXPS $FIXED_EXPS"
+
+# 1. sanity checks (fold 0, first seed): can the model fit a small set? does it stay at chance on
+#    shuffled labels? Kept under sanity/ so they never enter the CV report.
+SANITY=${SANITY:-1}
+SANITY_EXPS=${SANITY_EXPS:-"scratch_noimag scratch_mmbn_noimag wm_ft_mmbn"}
+OVERFIT_N=${OVERFIT_N:-64}; OVERFIT_EP=${OVERFIT_EP:-60}
+S0=${SEEDS%% *}
+if [ "$SANITY" = 1 ]; then
+  for e in $SANITY_EXPS; do
+    # shellcheck disable=SC2046
+    step "sanity_overfit_$e" python src/finetune_classify.py $COMMON $(exp_args "$e") --epochs "$OVERFIT_EP" \
+      --overfit "$OVERFIT_N" --freeze_epochs 0 --seed "$S0" --fold 0 --out "$OUT/sanity/overfit_$e"
+    # shellcheck disable=SC2046
+    step "sanity_shuffled_$e" python src/finetune_classify.py $COMMON $(exp_args "$e") --shuffle_labels \
+      --seed "$S0" --fold 0 --out "$OUT/sanity/shuffled_$e"
+  done
+  python src/sanity_report.py --dir "$OUT/sanity"
+fi
 
 for e in $EXPS; do
   for s in $SEEDS; do
