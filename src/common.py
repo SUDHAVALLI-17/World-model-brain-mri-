@@ -35,7 +35,9 @@ def task_frame(df, task):
 #   vol_ratio = our skull-stripped brain volume / OASIS eTIV: a normalised whole-brain volume that the
 #               per-brain crop + resize removes from the image itself
 #   nwbv      = OASIS's own normalised whole-brain volume (from their processing; a reference only)
-EXTRA_FEATS = ("vol_ratio", "nwbv")
+#   tissue_ratio = our brain-TISSUE volume / eTIV (add_tissue_volume.py): unlike vol_ratio it excludes the
+#               CSF inside the mask, which is where atrophy shows
+EXTRA_FEATS = ("vol_ratio", "nwbv", "tissue_ratio")
 
 
 def add_extra_columns(df):
@@ -44,6 +46,8 @@ def add_extra_columns(df):
         df["vol_ratio"] = pd.to_numeric(df.mask_ml, errors="coerce") / pd.to_numeric(df.etiv, errors="coerce")
     if "nwbv" in df:
         df["nwbv"] = pd.to_numeric(df.nwbv, errors="coerce")
+    if "tissue_ml" in df and "etiv" in df:
+        df["tissue_ratio"] = pd.to_numeric(df.tissue_ml, errors="coerce") / pd.to_numeric(df.etiv, errors="coerce")
     return df
 
 
@@ -52,7 +56,8 @@ def extra_stats(df, feats):
     out = {}
     for f in feats:
         if f not in df or df[f].notna().sum() < 2:
-            raise SystemExit(f"extra feature {f!r} is missing from the index (vol_ratio needs mask_ml + etiv)")
+            raise SystemExit(f"extra feature {f!r} is missing from the index (vol_ratio needs mask_ml + etiv; "
+                             "tissue_ratio needs add_tissue_volume.py)")
         out[f] = [float(df[f].mean()), float(df[f].std() + 1e-8)]
     return out
 

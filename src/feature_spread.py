@@ -14,6 +14,8 @@ Columns:
   spread/RMS   mean per-feature SD across scans / feature RMS. Near 0.01 = collapse (every scan
                gets nearly the same vector); tens of percent = scans are distinguishable
   cosine       mean cosine similarity between different scans (near 1 = collapse)
+  eff. rank    effective number of directions the features use (about 1 = dimensional collapse,
+               even when spread/RMS looks fine)
   probe AUC    logistic regression on the vector, cross-validated by SUBJECT on this sample,
                CDR 0 vs CDR >= 0.5 (and CN vs AD): how much label signal the vector carries
 
@@ -46,7 +48,7 @@ from torch.utils.data import DataLoader
 
 from common import get_device, get_logger, set_seed
 from data import ScanDataset, load_split
-from models import BrainWorldModel
+from models import BrainWorldModel, effective_rank
 
 log = get_logger("spread")
 POOLS = ("attn", "mean", "max", "meanmax", "tokens")
@@ -181,6 +183,7 @@ def main():
             fn = f.numpy()
             rows.append({"encoder": name, "kind": kind, "pool": mode, "dim": f.shape[1],
                          "RMS": round(rms, 4), "spread/RMS": round(ratio, 4), "cosine": round(cos, 4),
+                         "eff. rank": round(effective_rank(f), 2),
                          "probe AUC CDR0 vs >=0.5": round(probe_auc(fn, y_imp, groups, a.seed), 3),
                          "probe AUC CN vs AD": round(probe_auc(fn[m_ad], y_ad, groups[m_ad], a.seed), 3)})
         del wm, tok

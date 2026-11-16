@@ -75,6 +75,8 @@ fi
 step "$DATA" preprocess python src/preprocess.py --index "$DATA/index.csv" --out_dir "$DATA/proc" \
   --target "$TARGET" --spacing 1.5 --skullstrip auto --qc --encrypt --key_file "$KEY" --resume ${PREP_FLAGS:-}
 python src/secure_io.py verify --manifest "$DATA/proc/manifest.json"
+# brain-TISSUE volume from the cubes (mask volume includes CSF, so it misses atrophy)
+step "$DATA" tissue python src/add_tissue_volume.py --index "$DATA/proc/index_proc.csv" --key_file "$KEY"
 step "$DATA" sign python src/metadata_guard.py sign --index "$DATA/proc/index_proc.csv" --key_file "$KEY"
 python src/metadata_guard.py check --index "$DATA/proc/index_proc.csv"
 step "$DATA" splits python src/splits.py --index "$DATA/proc/index_proc.csv" --out "$DATA/splits.json" \

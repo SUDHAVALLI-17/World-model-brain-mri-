@@ -142,6 +142,19 @@ def sample_block_mask(B, grid, ratio=0.5, device="cpu"):
     return m.to(device)
 
 
+def effective_rank(z):
+    """exp(entropy of the normalised covariance eigenvalues) of an (n, d) feature matrix: about 1 when
+    every scan's features lie on one line (dimensional collapse), up to min(n, d) when spread out."""
+    z = torch.as_tensor(z, dtype=torch.float64)
+    if z.shape[0] < 3:
+        return float("nan")
+    z = z - z.mean(0)
+    ev = torch.linalg.svdvals(z) ** 2
+    p = ev / ev.sum().clamp(min=1e-12)
+    p = p[p > 0]
+    return float(torch.exp(-(p * p.log()).sum()))
+
+
 class BrainWorldModel(nn.Module):
     """Encoder + JEPA predictor + action-conditioned dynamics, plus two readout heads:
 
@@ -201,7 +214,8 @@ class BrainWorldModel(nn.Module):
 
     def forward_pretrain(self, x_t, x_f, action, is_transition, bpf_t=None, bpf_f=None,
                          age_known=None, mask_ratio=0.5, w_jepa=1.0, w_dyn=1.0, w_nll=0.1,
-                         w_var=0.04, w_vol=0.5, w_mono=0.5, w_age=0.1, x_adv=None, w_traj=1.0):
+                         w_var=0.04, w_vol=0.5, w_mono=0.5, w_age=0.1, x_adv=None, w_traj=1.0,
+                         w_cov=0.0, var_queue=0):
         B = x_t.shape[0]
         with torch.no_grad():
             tgt_t, grid = self.encode(x_t, target=True)
@@ -225,11 +239,41 @@ class BrainWorldModel(nn.Module):
         nll = 0.5 * (logvar + (g_f - mu) ** 2 / logvar.exp()).mean(1)
         l_nll = (nll * w).sum() / w.sum()
 
-        # --- anti-collapse: keep per-dimension variance of the pooled state
-        z = self.pool(tok_t)
-        l_var = F.relu(1 - torch.sqrt(z.var(0) + 1e-4)).mean() if B >= 4 else z.new_zeros(())
+        # --- anti-collapse (VICReg-style) on two image summaries: the attention-pooled state and the
+        #     mean of the tokens (what the classifier and the probes use).
+        #     variance: every dimension must vary across scans (hinge at SD 1)
+        #     covariance: dimensions must not all move together. Without it the variance term is met
+        #     by ONE shared direction copied into every dimension (dimensional collapse: measured
+        #     effective rank ~1.1 of 256 on OASIS-2 with variance alone)
+        #     var_queue > 0: statistics also use the last var_queue detached summaries, because a batch
+        #     of 4 scans gives a very noisy variance and no usable covariance
+        z_pool, z_mean = self.pool(tok_t), tok_t.mean(1)
+        l_var, l_cov = z_pool.new_zeros(()), z_pool.new_zeros(())
+        for name, z in (("pool", z_pool), ("mean", z_mean)):
+            zs = z
+            if var_queue > 0 and self.training:
+                q = getattr(self, f"_queue_{name}", None)
+                if q is not None and q.shape[1] == z.shape[1]:
+                    zs = torch.cat([z, q.to(z.device, z.dtype)], 0)
+            if zs.shape[0] >= 4:
+                std = torch.sqrt(zs.float().var(0) + 1e-4)
+                l_var = l_var + F.relu(1 - std).mean() / 2
+                if w_cov > 0:
+                    zc = zs.float() - zs.float().mean(0)
+                    cov = zc.T @ zc / (zs.shape[0] - 1)
+                    off = cov - torch.diag(torch.diag(cov))
+                    l_cov = l_cov + off.pow(2).sum() / z.shape[1] / 2
+            if var_queue > 0 and self.training:
+                old = getattr(self, f"_queue_{name}", None)
+                new = z.detach().float().cpu()
+                if old is not None and old.shape[1] == new.shape[1]:
+                    new = torch.cat([new, old], 0)
+                setattr(self, f"_queue_{name}", new[:var_queue])  # not a buffer: checkpoints unchanged
         parts = {"jepa": l_jepa.item(), "dyn": l_dyn.item(), "nll": l_nll.item(), "var": l_var.item()}
         loss = w_jepa * l_jepa + w_dyn * l_dyn + w_nll * l_nll + w_var * l_var
+        if w_cov > 0:
+            loss = loss + w_cov * l_cov
+            parts["cov"] = l_cov.item()
 
         # --- volume readout: BPF of the current scan, and of the real follow-up from mu
         if bpf_t is not None and w_vol > 0:

@@ -37,6 +37,8 @@ FEATURES = {
     "nWBV+eTIV+age+sex": ["nwbv", "etiv", "age", "sex_m"],
     "mask_ml/eTIV (ours)": ["our_ratio"],
     "mask_ml/eTIV+age+sex": ["our_ratio", "age", "sex_m"],
+    "tissue/eTIV (ours)": ["tissue_ratio"],
+    "tissue/eTIV+age+sex": ["tissue_ratio", "age", "sex_m"],
 }
 
 
@@ -50,7 +52,7 @@ def md(frame, index=True):
 
 def load(index):
     df = pd.read_csv(index)
-    for c in ("nwbv", "etiv", "cdglobal", "mask_ml", "mmscore", "age"):
+    for c in ("nwbv", "etiv", "cdglobal", "mask_ml", "mmscore", "age", "tissue_ml"):
         if c not in df:
             df[c] = np.nan
     df["sex_m"] = (df.sex.astype(str).str.upper().str[0] == "M").astype(float)
@@ -58,6 +60,7 @@ def load(index):
         if c in df:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     df["our_ratio"] = df.mask_ml / df.etiv
+    df["tissue_ratio"] = pd.to_numeric(df.tissue_ml, errors="coerce") / df.etiv
     return df.sort_values(["subject", "acq_date"])
 
 

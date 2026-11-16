@@ -106,7 +106,19 @@ re-splitting changes the held-out test subjects, which the world model was pretr
    encoder and each checkpoint, under attention / mean / max / [mean, max] pooling and with no pooling.
    If the tokens differ but the attention-pooled vector does not, train with
    `--pool meanmax --head_norm batch` (experiments `scratch_mmbn`, `wm_ft_mmbn` in `run_cv.sh`).
-5. **Optional fixed-size crop**: the default crop scales every brain to fill the cube, which removes
+5. **Frozen-encoder probe** (`probe_cv.py`): pooled features of the frozen encoder (attention / mean /
+   [mean, max] / all tokens) + standardised logistic regression on the same patient-level folds, with
+   patient-bootstrap CIs and a paired comparison against brain-tissue volume alone. An honest number with
+   no fine-tuning, which on OASIS-2 collapsed the features.
+6. **Tissue volume** (`add_tissue_volume.py`): the skull-strip mask includes CSF, so mask volume barely
+   changes with atrophy (CN vs AD AUC 0.66 vs 0.83 for OASIS nWBV). This adds `tissue_frac`, `tissue_ml`
+   and `tissue_ratio` = tissue / eTIV from the existing cubes (Otsu CSF / tissue threshold per scan);
+   `--extra_feats tissue_ratio` feeds it to the classifier.
+7. **Anti-collapse pretraining**: the world-model loss now has a covariance (decorrelation) term and a
+   feature queue (`--w_var 1 --w_cov 0.04 --var_queue 64`; older runs = `--w_var 0.04 --w_cov 0 --var_queue 0`,
+   which reached effective rank about 1.1 of 256). The log prints `eff_rank` each epoch. `--exclude_fold k`
+   pretrains without fold k's validation patients; `FOLD_PRETRAIN=1 bash run_cv.sh` does all folds.
+8. **Optional fixed-size crop**: the default crop scales every brain to fill the cube, which removes
    whole-brain atrophy. `preprocess.py --crop fixed --crop_mm 192 --stage1_dir data/stage1 --out_dir data/proc_fixed`
    keeps every brain at the same mm scale; `--stage1_dir` caches the skull-stripped images so later crop
    changes skip HD-BET. Compare with `INDEX_FIXED=data/proc_fixed/index_proc.csv FIXED_EXPS=scratch_fixed bash run_cv.sh`.
@@ -148,6 +160,8 @@ in `common.py` and `action_dim`.
 | `src/diagnose_labels.py` | Label audit + non-imaging baselines (nWBV, volume / eTIV, age + sex) on the CV folds |
 | `src/feature_spread.py` | Feature-collapse check: spread of image features across scans per encoder and pooling, plus a linear probe |
 | `src/check_preprocessed.py` | Is the preprocessing good? Technical checks, flipped-cube detection, pictures, and a voxel classifier on the final cubes |
+| `src/probe_cv.py` | Frozen-encoder probe with patient-level CV, CIs and a paired comparison |
+| `src/add_tissue_volume.py` | Brain-tissue volume (excludes CSF) from the preprocessed cubes |
 | `src/sanity_report.py` | Verdicts for the memorisation and shuffled-label checks |
 | `src/cv_report.py` | Pools CV predictions over folds and seeds: subject-bootstrap CIs, paired comparison |
 | `run_cv.sh` | Controlled evaluation: experiments x seeds x folds, then one report |
